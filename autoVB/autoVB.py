@@ -1514,6 +1514,8 @@ class XMVBNBO:
             raise ValueError("Active orbital count must be an integer.")
         if not isinstance(self.active_electron, int) :
             raise ValueError("Active electron count must be an integer.")
+        if self.active_orbital < 1 or self.active_electron < 1:
+            raise ValueError("Active orbital count and active electron count must be positive integers.")
 
     def _df_indices(self) -> None:
         '''
@@ -1623,6 +1625,7 @@ class XMVBNBO:
             self.active_orbital = None
             self.active_electron = None
             raise e
+        print(f"Active space set: {self.active_electron} electrons / {self.active_orbital} orbitals")
 
     def set_active_orbital_atom(self, active_orbital_atom_indices: List[List[int]]) -> None:
         '''
@@ -1949,22 +1952,6 @@ $end
             f.write(xmi_text)
         print(f"Wrote XMVB .xmi to {xmi_path}")
 
-class XMVBNBOMain(XMVBNBO):
-    def __init__(self, filename: str):
-        self.chkname = f'{filename}.chk'
-        self.fchname = f'{filename}.fch'
-        generate_fch_from_chk(self.chkname, self.fchname)
-        mol = load_mol_from_fch(self.fchname)
-        super().__init__(filename, mol)
-
-    def main(self):
-        self.set_active_space(8,8)
-        # wxp.auto_select_active_space(1.9,auto_set=True)
-        self.set_basis_set('cc-pvdz')
-        # wxp.set_active_orbital_atom([[4,13],[9,12],[11, 8],[7, 10]])
-        inact, act = self.split_inactive_active_orbitals()
-        self.write_xmi(inact, act, reorder=False, atom_slice=False)
-
 class GaussianNBO:
     def __init__(self, filename: str, mol: 'gto.Mole'):
         '''
@@ -2009,7 +1996,7 @@ class GaussianNBO:
 
 {self.filename}
 
-0 1
+{self.mol.charge} {self.mol.spin + 1}
 {self.geometry_text}
 
 $NBO plot file={self.filename} $END
@@ -2019,7 +2006,7 @@ $NBO plot file={self.filename} $END
         with open(f'{self.filename}.gjf', 'w') as f:
             f.write(filetext)
         print(f"Wrote Gaussian NBO input file to {self.filename}.gjf")
-
+        print(f'You need to manually verify if the charge and spin multiplicity are correct.')
 
 
 if __name__ == "__main__":

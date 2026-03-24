@@ -1,3 +1,7 @@
+# .gjf and .xmi
+*.gjf
+*.xmi
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
