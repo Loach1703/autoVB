@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "autoVB"
 version = "0.1.0"
 description = "A generator of XMVB input file: AutoVB tools"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "pyscf",
@@ -17,3 +17,7 @@ dependencies = [
 # 左边是终端中的命令名称，右边是 包名.模块名:函数名
 autovb-nbo = "autoVB.cli:autovb_nbo"
 autovb-xmi = "autoVB.cli:autovb_xmi"
+autovb = "autoVB.cli:autovb_main"
+
+[tool.setuptools]
+packages = ["autoVB"]

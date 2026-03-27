@@ -1,28 +1,53 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import numpy as np
+import argparse
 import datetime
 import re
 import sys
-import subprocess
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, TYPE_CHECKING
 from collections import Counter
-from .constants import FLOAT_RE, BASIS_FUNCTION_DICT, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3
 if TYPE_CHECKING:
     from pyscf import gto
-
 
 """
 自动生成 XMVB 输入文件
 包括活性空间选择，初猜生成
 TODO pyscf -> XMVB
 """
-# GVB GI orbital可以通过mokit的一个接口生成，但是很难用
-# gen_cf_orb(datname='xxxx.dat',ndb=10,nopen=0)
-# ndb为双占的离域轨道数量，nopen是开壳层的单占轨道数量
-# 详情查看 https://doc.mokit.xyz/chap4-6.html#4634-gen_cf_orb
+
+FLOAT_RE = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$')
+BASIS_FUNCTION_DICT = {
+    'S': 'S',
+    'X': 'PX',
+    'Y': 'PY',
+    'Z': 'PZ',
+    'XX': 'DXX',
+    'YY': 'DYY',
+    'ZZ': 'DZZ',
+    'XY': 'DXY',
+    'XZ': 'DXZ',
+    'YZ': 'DYZ',
+    'XXX': 'FXXX',
+    'XXY': 'FXXY',
+    'XXZ': 'FXXZ',
+    'YYX': 'FXYY',
+    'XYZ': 'FXYZ',
+    'ZZX': 'FXZZ',
+    'YYY': 'FYYY',
+    'YYZ': 'FYYZ',
+    'ZZY': 'FYZZ',
+    'ZZZ': 'FZZZ',
+}
+# 轨道替换规则字典，例如D_ORBITAL_3TO4的规则为，原本的第1号轨道需要替换为新的第3号轨道，原本的第2号轨道替换为新的第5号轨道
+# 3对应的是XX YY ZZ XY XZ YZ，4对应的是XX XY XZ YY YZ ZZ
+D_ORBITAL_3TO4 = {0: 0, 1: 3, 2: 5, 3: 1, 4: 2, 5: 4}
+D_ORBITAL_4TO3 = {0: 0, 1: 3, 2: 4, 3: 1, 4: 5, 5: 2}
+F_ORBITAL_3TO4 = {0: 0, 1: 6, 2: 9, 3: 1, 4: 2, 5: 3, 6: 7, 7: 5, 8: 8, 9: 4}
+F_ORBITAL_4TO3 = {0: 0, 1: 3, 2: 4, 3: 5, 4: 9, 5: 7, 6: 1, 7: 6, 8: 8, 9: 2}
+
 
 def build_shift_map(offset: int, base: dict[int, int]) -> dict[int, int]:
     """
@@ -533,7 +558,7 @@ def print_localized_orbitals_info(number: int, orbital: np.ndarray, atom_labels:
             print(f"原子 {o[0]} ({o[1]}) 贡献: {round(o[2]*100,1)}%")
     return orbital_atom
 
-def print_localized_orbitals_info_pyscf(number: int, orbital: np.ndarray, mol: 'gto.Mole', need_print: bool = False, need_atom_number:int = 0) -> List[Tuple[int, str, float]]:
+def print_localized_orbitals_info_pyscf(number: int, orbital: np.ndarray, mol: 'gto', need_print: bool = False, need_atom_number:int = 0) -> List[Tuple[int, str, float]]:
     """
     打印轨道信息，采用pyscf的gto类型
     Args:
@@ -574,60 +599,7 @@ def print_localized_orbitals_info_pyscf(number: int, orbital: np.ndarray, mol: '
             print(f"原子 {o[0]} ({o[1]}) 贡献: {round(o[2]*100,1)}%")
     return orbital_atom
 
-def print_basis_function_info_pyscf(number: int, atom_num: int, orbital: np.ndarray, mol: 'gto.Mole', need_print: bool = False) -> List[Tuple[int, str, float]]:
-    """
-    打印基函数信息，采用pyscf的gto类型，SCPA布居法（平方和贡献度分析）
-    Args:
-        number (int): 轨道编号
-        atom_num (int): 原子编号（从1开始）
-        orbital (np.ndarray): 轨道系数数组，一维的，每个对应一个基函数
-        mol (gto): pyscf的gto对象，包含分子信息
-        need_print (bool): 是否打印轨道信息，默认False
-        need_atom_number (int): 需要的原子数量，默认0表示打印所有贡献大于10%的原子
-    Returns:
-        List[Tuple[int, str, float]]: 包含原子编号、原子符号和贡献度的列表，按贡献度从高到低排序
-    """
-    # 所有基函数的列表：int 原子序号（从0开始），str 原子符号+编号，str 基函数类型, str 基函数磁量子数，长度为基函数总数
-    atom_labels: List[Tuple[int,str,str,str]] = mol.ao_labels(fmt=False)
-    num_atoms = mol.natm
-    # [壳层起始, 壳层结束, 起始基函数索引, 结束基函数索引]
-    slices: List[List[int,int,int,int]] = mol.aoslice_by_atom()
-    ao_basis_slice_index = slices[atom_num-1]
-    start_bf = ao_basis_slice_index[2]
-    end_bf = ao_basis_slice_index[3]
-    ao_basis_function = atom_labels[start_bf:end_bf]
-
-    # 将基函数归类，包括s,p,d,f等类型，得到一个字典，键为基函数类型，值为该类型的基函数索引列表
-    ao_basis_function_type: dict[str, list[int]] = {}
-    for i, aobf in enumerate(ao_basis_function):
-        bf_type = aobf[2].strip("0123456789")
-        if bf_type not in ao_basis_function_type:
-            ao_basis_function_type[bf_type] = []
-        ao_basis_function_type[bf_type].append(i+1)
-
-    need_orbital = orbital[start_bf:end_bf]
-    square_sum_coeff = sum(abs(need_orbital)**2)
-    orbital_atom = []
-    for i, abft in enumerate(ao_basis_function_type.items()):
-        # 第i个基函数类型的起始和结束基函数索引
-        start_index = abft[1][0]
-        end_index = abft[1][-1]
-        # print(start_index, end_index)
-        # print(orbital[start_index:end_index])
-        contribution = sum(abs(need_orbital[start_index:end_index])**2)
-        # 计算该原子的基函数系数平方和
-        orbital_atom.append((i+1, abft[0], float(contribution / square_sum_coeff)))
-        # print("系数:", orbital[start_index:end_index]) # 打印基函数系数
-    orbital_atom.sort(key=lambda x: x[2], reverse=True)
-    if need_print:
-        print(f"轨道 {number} 原子{atom_num}({mol.atom_pure_symbol(atom_num-1)}):")
-        print("系数平方和：", square_sum_coeff)
-        print("="*80)
-        for o in orbital_atom:
-            print(f"{o[1]}基函数 贡献: {round(o[2]*100,1)}%")
-    return orbital_atom
-
-def get_orbital_atom_contribution(orbital: np.ndarray, mol: 'gto.Mole') -> List[List[int]]:
+def get_orbital_atom_contribution(orbital: np.ndarray, mol: 'gto') -> List[List[int]]:
     """
     获取一组轨道的原子贡献度信息，返回每个轨道最高贡献度的两个原子组成的list
     Args:
@@ -642,7 +614,7 @@ def get_orbital_atom_contribution(orbital: np.ndarray, mol: 'gto.Mole') -> List[
         orbital_atom_list.append([k[0] for k in orbital_atom])
     return orbital_atom_list
     
-def export_raw_molden(mol_obj: 'gto.Mole', filename, coefficient_matrix: np.ndarray):
+def export_raw_molden(mol_obj, filename, coefficient_matrix):
     """
     导出 Molden 文件，不进行任何排序和系数缩放转换，原样输出 NumPy 的数值
     """
@@ -662,46 +634,6 @@ def export_raw_molden(mol_obj: 'gto.Mole', filename, coefficient_matrix: np.ndar
             # 原样遍历输出每一列(轨道)的所有行(基函数)数值
             for j in range(num_ao):
                 f.write(f" {j+1:4d} {coefficient_matrix[j, i]:20.10e}\n")
-
-def generate_fch_from_chk(chkname: str, fchname: str):
-    print(f"Running formchk to generate {fchname}...")
-    
-    # 使用 subprocess.run 替换 os.system 获取输出内容
-    result = subprocess.run(
-        f"formchk {chkname} {fchname}", 
-        shell=True, 
-        capture_output=True, 
-        text=True
-    )
-    
-    # 获取并打印标准输出 (stdout)
-    print(result.stdout)
-    
-    # 获取并打印错误输出 (stderr)
-    if result.stderr:
-        print(result.stderr)
-
-def pyscf_to_xyz(mol: 'gto.Mole') -> str:
-    """
-    将 pyscf 的 gto.Mole 对象转换为 XYZ 格式的字符串
-    Args:
-        mol (gto.Mole): pyscf 的 gto.Mole 对象，包含分子信息
-    Returns:
-        str: XYZ 格式的字符串
-    """
-    # 获取几何坐标文本 (XYZ 格式)
-    # mol.atom_coords(unit='ANG') 提取坐标，默认是Bohr，传入 'ANG' 转换为埃(Angstrom)
-    coords = mol.atom_coords(unit='ANG')
-    geo_lines = []
-    for i in range(mol.natm):
-        # 获取纯元素符号（去除数字）
-        sym = mol.atom_pure_symbol(i)
-        x, y, z = coords[i]
-        # 格式化为 XYZ 文本
-        geo_lines.append(f"{sym:2s}  {x:12.9f}  {y:12.9f}  {z:12.9f}")
-
-    geometry_text = "\n".join(geo_lines)
-    return geometry_text
 
 class GVBGI:
     # GI ORBITAL格式：
@@ -1429,16 +1361,16 @@ $end
             f.write(write_text)
         print(f"Wrote .{suffix} data to {file_name}")
 
-class XMVBNBO:
-    """
-    读取Pyscf的Mole对象和Gaussian NBO输出文件，提取轨道信息并转换为XMVB格式的写入器
-    """
+class WriteXMVBPyscf:
+
     def __init__(self, filename: str, mol: 'gto.Mole'):
         '''
-        读取Pyscf的Mole对象和Gaussian NBO输出文件，提取轨道信息并转换为XMVB格式的写入器
+        初始化一个Pyscf到XMVB的写入器
         Args:
             filename (str): 文件名（不带后缀）
             mol (pyscf.gto.Mole): Mole对象，包含分子信息
+            orbital_matrix (np.ndarray): 形状为 (轨道数, 基函数数) 的轨道矩阵，包含每个轨道在每个基函数上的系数
+            occupation_numbers (np.ndarray): 形状为 (轨道数,) 的占据数数组，表示每个轨道的占据数
         '''
         # 主要需要的是两个信息：pyscf的分子对象，以及轨道信息
         self.filename = filename
@@ -1457,7 +1389,17 @@ class XMVBNBO:
         self.formula = formula
 
         # 获取 XMVB 需要的几何坐标文本 (XYZ 格式)
-        self.geometry_text = pyscf_to_xyz(self.mol)
+        # mol.atom_coords(unit='ANG') 提取坐标，默认是Bohr，传入 'ANG' 转换为埃(Angstrom)
+        coords = self.mol.atom_coords(unit='ANG')
+        geo_lines = []
+        for i in range(self.mol.natm):
+            # 获取纯元素符号（去除数字）
+            sym = self.mol.atom_pure_symbol(i)
+            x, y, z = coords[i]
+            # 格式化为 XYZ 文本
+            geo_lines.append(f"{sym:2s}  {x:12.8f}  {y:12.8f}  {z:12.8f}")
+        
+        self.geometry_text = "\n".join(geo_lines)
 
         # 一些可能需要用到的：
         # 所有基函数的列表：int 原子序号（从0开始），str 原子符号+编号，str 基函数类型, str 基函数磁量子数，长度为基函数总数
@@ -1482,8 +1424,6 @@ class XMVBNBO:
             raise ValueError("Active orbital count must be an integer.")
         if not isinstance(self.active_electron, int) :
             raise ValueError("Active electron count must be an integer.")
-        if self.active_orbital < 1 or self.active_electron < 1:
-            raise ValueError("Active orbital count and active electron count must be positive integers.")
 
     def _df_indices(self) -> None:
         '''
@@ -1535,55 +1475,12 @@ class XMVBNBO:
         occupation_numbers = orb_array_all[-1]
         return orb_array, occupation_numbers
 
-    def auto_select_active_space(self, threshold: float=1.8, auto_set=False) -> tuple[int, int]:
-        '''
-        根据NBO占据数自动选择活性空间，返回活性电子数, 活性轨道数
-        Args:
-            threshold (float): 活性空间选择的占据数阈值，选择占据数小于等于该阈值的轨道作为活性轨道
-            auto_set (bool): 是否自动将选择的活性空间设置，默认False
-        Returns:
-            tuple: (tuple[int, int]): 活性电子数, 活性轨道数
-        '''
-        active_orbital = 0
-        active_electron = 0
-        active_orbital_indices = []
-        active_orbital_matrix = []
-        # 筛选占据数大于1且小于等于threshold的轨道
-        valid_occupied_indices = np.where((self.occupation_numbers > 1.0) & (self.occupation_numbers <= threshold))[0]
-        
-        # 填充到 indices 和 matrix 中
-        active_orbital_indices = valid_occupied_indices.tolist()
-        active_orbital_matrix = self.orbital_matrix[valid_occupied_indices]
-        
-        for i, occ in zip(active_orbital_indices, self.occupation_numbers[valid_occupied_indices]):
-            print(f"Selected NBO orbital {i+1}, Occupation number: {occ:.4f}")
-
-        # 调用 get_orbital_atom_contribution 判断这些轨道在哪些原子上
-        # 返回结构类似 [[1, 2], [3, 4]]
-        orb_atoms = get_orbital_atom_contribution(active_orbital_matrix, self.mol)
-        orb_atoms_flat = [j for i in orb_atoms for j in i]
-
-        # 计算出活性轨道数量（等于各条轨道包含的原子数） 活性电子数量（等于所需要使用的NBO轨道数量的两倍）
-        active_orbital = len(orb_atoms_flat)
-        active_electron = len(active_orbital_indices) * 2
-        if auto_set == True:
-            if active_orbital == 0 or active_electron == 0:
-                raise ValueError("No active orbitals selected based on the given threshold. Please adjust the threshold or check the occupation numbers.")
-            else:
-                # 自动将该属性应用到类中
-                print(f"Automatically setting active space: {active_electron} electrons / {active_orbital} orbitals")
-                self.set_active_space(active_electron, active_orbital)
-        # 自动覆盖成键原子关系网用于后续切片
-        # self.set_active_orbital_atom(orb_atoms)
-        
-        return active_electron, active_orbital
-
-    def set_active_space(self, active_electron: int, active_orbital: int) -> None:
+    def set_active_space(self, active_orbital: int, active_electron: int) -> None:
         '''
         设置活性空间的轨道数和电子数
         Args:
-            active_electron (int): 活性电子数
             active_orbital (int): 活性轨道数
+            active_electron (int): 活性电子数
         '''
         self.active_orbital = active_orbital
         self.active_electron = active_electron
@@ -1593,7 +1490,6 @@ class XMVBNBO:
             self.active_orbital = None
             self.active_electron = None
             raise e
-        print(f"Active space set: {self.active_electron} electrons / {self.active_orbital} orbitals")
 
     def set_active_orbital_atom(self, active_orbital_atom_indices: List[List[int]]) -> None:
         '''
@@ -1613,7 +1509,7 @@ class XMVBNBO:
 
     def set_basis_set(self, basis_set: str) -> None:
         '''
-        设置基组名称，注意如果NBO计算的基组与这里设置的基组不一致，可能会导致生成的XMVB文件与实际计算不匹配
+        设置基组名称
         Args:
             basis_set (str): 基组名称，例如 'cc-pVDZ'
         '''
@@ -1628,7 +1524,7 @@ class XMVBNBO:
         self._check_active_space()
         # 根据NBO占据数判断活性轨道，选择最小的half_orb个
         # 一半的轨道数量
-        half_orb = int(self.active_electron / 2)
+        half_orb = int(self.active_orbital / 2)
 
         not_greater_than_one = self.occupation_numbers <= 1
         if not np.any(not_greater_than_one):
@@ -1641,7 +1537,6 @@ class XMVBNBO:
         actual_half_orb = min(half_orb, len(relevant_values))
         # 活性轨道索引
         actorb_indices = np.argsort(relevant_values)[:actual_half_orb]
-        print(f"Automatically selected active orbital indices based on occupation numbers: {actorb_indices}, corresponding occupation numbers: {self.occupation_numbers[actorb_indices]} include atom(s): {get_orbital_atom_contribution(self.orbital_matrix[actorb_indices], self.mol)}")
         return actorb_indices
     
     def get_active_orbital_indices_from_atom(self, active_atom:List[List[int]]) -> List[int]:
@@ -1652,7 +1547,7 @@ class XMVBNBO:
         Returns:
             List[int]: 活性轨道的索引列表
         '''
-        # self._check_active_space()
+        self._check_active_space()
         actorb_indices = []
         for pair in active_atom:
             sao_list = self.get_selected_atom_orbital(pair)
@@ -1722,10 +1617,8 @@ class XMVBNBO:
             orb_atom_list += orb_atom
         if reorder:
             orb_atom_list.sort()
-
-        orb_atom_list[0] = f"{orb_atom_list[0]}   # active orbital start"
-
         orb_text = '\n'.join(str(i) for i in orb_atom_list) + '\n'
+
         orb_tuple = (head_text,orb_text)
         return orb_tuple
 
@@ -1771,26 +1664,21 @@ class XMVBNBO:
             tuple (Tuple[str, str]): $gus 部分文本，前端为头文本，后端为轨道文本
         '''
         oac = get_orbital_atom_contribution(orbital_matrix, self.mol)
+
         atoms_num = [j for i in oac for j in i]
 
         reordered_orbitals = []
-        calculation_actorb_count = 0
-        for i, oac_item in enumerate(oac):
+        for i in range(len(oac)):
             new_orb = orbital_matrix[i] 
-            # 根据轨道数量看需要复制多少份，同时计算活性轨道数量
-            for _ in oac_item:
-                calculation_actorb_count += 1
-                reordered_orbitals.append(new_orb)
-
-        if calculation_actorb_count != self.active_orbital:
-            raise ValueError(f"Calculated active orbital count ({calculation_actorb_count}) does not match expected active orbital count ({self.active_orbital}). Check active space settings.\
-                             You can choose active atom manually by set_active_orbital_atom method")
+            # 这里就是要复制两份，没有问题
+            reordered_orbitals.append(new_orb)
+            reordered_orbitals.append(new_orb)
                 
         # 重新赋值为排序并拆解后的轨道矩阵 (此时轨道数变为原来的两倍)
         orbital_matrix = np.array(reordered_orbitals)
 
         # 将分子轨道切割为原子轨道
-        # TODO 有时候切割会错误，待查，似乎是因为get_orb_section_active方法以前没有重排选项导致的，现在好像已经修好了
+        # TODO 有时候切割会错误，待查
         if atom_slice:
             sliced_orbitals = []
             for i, atom in enumerate(atoms_num):
@@ -1809,7 +1697,6 @@ class XMVBNBO:
         head_text = (' ' + str(orbital_matrix.shape[1])) * orbital_matrix.shape[0]
         orb_text = ''
         # TODO 支持（7，8）这样的活性空间，目前会报错
-        # 26/3/19 已经完成支持（7，8）这样的活性空间了
         for i, orb in enumerate(orbital_matrix):
             orb_text += f'# ACTIVE ORBITAL        {i+1}  NAO =    {len(orb)} Localization in atom {atoms_num[i]}{self.mol.atom_pure_symbol(atoms_num[i]-1)}\n'
             orb_text += make_xmvb_format_text(orb, per_line=4)
@@ -1862,10 +1749,9 @@ class XMVBNBO:
 
         return inactive_orbital_matrix, active_orbital_matrix
 
-    def write_xmi(self, inactive_orbital_matrix: np.ndarray, active_orbital_matrix: np.ndarray, orb_type: str='oeo', reorder=True, atom_slice=True, xmi_path:Path = None) -> None:
+    def write_xmi(self, inactive_orbital_matrix: np.ndarray, active_orbital_matrix: np.ndarray, orb_type: str='oeo', reorder=True, atom_slice=True) -> None:
         self._check_active_space()
-        if not xmi_path:
-            xmi_path = Path(f'{self.filename}.xmi')
+        xmi_path = Path(f'{self.filename}.xmi')
 
         # 获取orb部分
         inactive_head, inactive_text = self.get_orb_section_inactive(inactive_orbital_matrix)
@@ -1920,62 +1806,6 @@ $end
         with open(xmi_path, 'w') as f:
             f.write(xmi_text)
         print(f"Wrote XMVB .xmi to {xmi_path}")
-
-class GaussianNBO:
-    def __init__(self, filename: str, mol: 'gto.Mole'):
-        '''
-        用于生成GaussianNBO的输入文件
-        Args:
-            filename (str): 文件名（不带后缀）
-            mol (pyscf.gto.Mole): Mole对象，包含分子信息
-        '''
-        # 主要需要的是两个信息：pyscf的分子对象，以及轨道信息
-        self.filename = filename
-        self.mol = mol
-        self.geometry_text = pyscf_to_xyz(self.mol)
-
-    def read_xyz_file(self, filename: str) -> str:
-        '''
-        这是AI写的，目前没有用！
-        从XYZ文件中读取几何坐标，返回适合Gaussian输入文件的格式
-        Args:
-            filename (str): XYZ文件名（带后缀）
-        Returns:
-            str: 适合Gaussian输入文件的几何坐标文本
-        '''
-        with open(filename, 'r') as f:
-            lines = f.readlines()
-        
-        # 跳过前两行（原子数和注释），从第三行开始是原子坐标
-        geo_lines = []
-        for line in lines[2:]:
-            parts = line.split()
-            if len(parts) < 4:
-                continue  # 跳过格式不正确的行
-            sym = parts[0]
-            x, y, z = parts[1:4]
-            geo_lines.append(f"{sym:2s}  {x:12.8f}  {y:12.8f}  {z:12.8f}")
-        
-        geometry_text = "\n".join(geo_lines)
-        return geometry_text
-
-    def write_gjf(self, mem: str='4GB', nproc: int=4):
-        filetext = f'''%chk={self.filename}.chk
-%mem={mem}
-%nprocshared={nproc}
-#p rhf/{self.mol.basis} pop=nboread nosymm int(nobasistransform) 6D 10F
-
-{self.filename}
-
-{self.mol.charge} {self.mol.spin + 1}
-{self.geometry_text}
-
-$NBO plot file={self.filename} $END
-
-
-'''
-        with open(f'{self.filename}.gjf', 'w') as f:
-            f.write(filetext)
 
 if __name__ == "__main__":
     pass

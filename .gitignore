@@ -1,9 +1,15 @@
-# .gjf and .xmi
+# example files
+autovb.err-*
+autovb.log-*
+g16.*
 *.gjf
 *.xmi
+*.out
+C4H6_*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 
