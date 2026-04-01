@@ -10,14 +10,15 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "pyscf",
-    "mokit"
+    "mokit",
+    "pyssian",
 ]
 
 [project.scripts]
-# 左边是终端中的命令名称，右边是 包名.模块名:函数名
 autovb-nbo = "autoVB.cli:autovb_nbo"
 autovb-xmi = "autoVB.cli:autovb_xmi"
 autovb = "autoVB.cli:autovb_main"
+autovb-test = "autoVB.cli:autovb_test"
 
 [tool.setuptools]
 packages = ["autoVB"]

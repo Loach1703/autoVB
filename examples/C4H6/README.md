@@ -1,4 +1,4 @@
-you can run these command:
+you can run these command to test:
 ```
 autovb-nbo C4H6.xyz cc-pvdz
 autovb-xmi C4H6 cc-pvdz -t 1.95

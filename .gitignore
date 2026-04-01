@@ -6,6 +6,11 @@ g16.*
 *.xmi
 *.out
 C4H6_*
+82712_*
+mol-*
+scr-*
+tmp-*
+orb.tmp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

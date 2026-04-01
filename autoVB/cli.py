@@ -6,7 +6,7 @@ import os
 from time import sleep
 
 from .commands import autovb_nbo_impl, autovb_xmi_impl
-from .main import autoVBMain
+from .main import autoVBMain, autoVBInputParser
 from .autoVB import XMVBNBO, generate_fch_from_chk
 from mokit.lib.gaussian import load_mol_from_fch
 
@@ -77,7 +77,7 @@ def autovb_xmi(argv=None):
     return autovb_xmi_impl(name, mol, args.basis, nae, nao, aoa, threshold, args.reorder, args.slice)
 
 def autovb_main(argv=None):
-    print("Welcome to autoVB!")
+    print("Welcome to autoVB! Version 0.1.0")
 
     argv = list(argv) if argv is not None else sys.argv[1:]
     if not argv:
@@ -86,11 +86,14 @@ def autovb_main(argv=None):
 
     input_file = Path(argv[0])
     resolved = input_file.resolve()
-    basis = "6-31G*"
     if not resolved.exists():
         print(f"Error: input file not found: {input_file}", file=sys.stderr)
         return 2
+    parser = autoVBInputParser(input_file)
 
+    # 命令行参数优先级最高，其次是输入文件参数，最后是默认值
+    mem = parser.input_data.mem if parser.input_data.mem else "4GB"
+    nproc = parser.input_data.nproc if parser.input_data.nproc else "1"
     mem = argv[1] if len(argv) > 1 else "4GB"
     nproc = argv[2] if len(argv) > 2 else "1"
     # G to GB
@@ -99,15 +102,38 @@ def autovb_main(argv=None):
     if mem.lower().endswith("m"):
         mem = mem[:-1] + "MB"
     print(f"Using memory: {mem}, nproc: {nproc}")
-
-    print(f"Input filename: {resolved.name}")
-    print(f"Basename: {resolved.stem}")
-    print(f"Suffix: {resolved.suffix}")
     print(resolved.parent)
 
-    main_obj = autoVBMain(resolved, mem=mem, nproc=nproc)
-    main_obj.generate_gjf_from_xyz(basis, charge=0, spin=0)
-    main_obj.run_gaussian_to_fch(main_obj.nbo_gjf_name)
-    main_obj.generate_nbo_to_xmi(basis=basis, threshold=1.95)
+    main_obj = autoVBMain(parser.input_data)
+
+    print("="*40)
+    print("Entry Gaussian NBO Calculation")
+    print("="*40)
+    main_obj.generate_gjf_from_geo()
+    main_obj.run_gaussian(main_obj.nbo_gjf_name)
+    main_obj.run_formchk(main_obj.nbo_gjf_name)
+
+    print("="*40)
+    print("Entry XMVB Calculation")
+    print("="*40)
+    main_obj.generate_nbo_to_xmi()
     main_obj.run_xmvb()
-    # sleep(10)
+
+    print("="*40)
+    print("autoVB workflow completed successfully!")
+
+def autovb_test():
+    input_file = Path('C4H6.autovb')
+    resolved = input_file.resolve()
+    parser = autoVBInputParser(input_file)
+    mem = "4GB"
+    nproc = "4"
+    print(f"Using memory: {mem}, nproc: {nproc}")
+    print(resolved.parent)
+
+    main_obj = autoVBMain(parser.input_data)
+
+    print("="*40)
+    print("Entry XMVB Calculation")
+    print("="*40)
+    main_obj.generate_nbo_to_xmi()
