@@ -10,9 +10,8 @@ if [ -f "$CONDA_ROOT/etc/profile.d/conda.sh" ]; then
 else
   eval "$("$CONDA_ROOT/bin/conda" shell.bash hook)"
 fi
-# conda activate mokit-py311
 
-MOKIT_BIN="/pool1/home/chentz/.conda/envs/mokit-py311/bin"
+MOKIT_BIN="/pool1/home/chentz/.conda/envs/autoVB-test/bin"
 export PATH="$MOKIT_BIN:$PATH"
 export PATH="/share/apps/xmvb/latest/bin:$PATH"
 export g16root=/share/apps/g16_avx2
