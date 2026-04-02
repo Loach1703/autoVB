@@ -7,7 +7,7 @@ import sys
 import subprocess
 import os
 from pathlib import Path
-from typing import Dict, List, Tuple, Set, TYPE_CHECKING
+from typing import Dict, List, Tuple, TYPE_CHECKING
 from collections import Counter
 from .constants import FLOAT_RE, BASIS_FUNCTION_DICT, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3
 from .utils import (
@@ -1227,6 +1227,8 @@ class XMVBNBO:
                   atom_slice: bool = True, 
                   xmi_path: Path = None,
                   stru_type: str = None,
+                  method: str = 'vbscf',
+                  sort: bool = False,
                   ) -> None:
         self._check_active_space()
         if not xmi_path:
@@ -1254,9 +1256,7 @@ class XMVBNBO:
             else:
                 stru_type = 'full'
 
-        xmi_text = f'''{self.filename} Created by autoVB {datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
-$ctrl
-vbscf
+        ctrl_text = f"""{method}
 str={stru_type}
 nao={self.active_orbital}
 nae={self.active_electron}
@@ -1268,6 +1268,14 @@ int=libcint
 basis={self.basis_set}
 itmax=2000
 molden
+output=aim
+"""
+        if sort:
+            ctrl_text += 'sort\n'
+
+        xmi_text = f'''{self.filename} Created by autoVB {datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
+$ctrl
+{ctrl_text}
 $end
 
 $orb

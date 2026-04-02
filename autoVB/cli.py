@@ -7,7 +7,8 @@ from time import sleep
 
 from .commands import autovb_nbo_impl, autovb_xmi_impl
 from .main import autoVBMain, autoVBInputParser
-from .autoVB import XMVBNBO, generate_fch_from_chk
+from .autoVB import XMVBNBO
+from .utils import generate_fch_from_chk
 from mokit.lib.gaussian import load_mol_from_fch
 
 def autovb_nbo(argv=None):
@@ -101,8 +102,12 @@ def autovb_main(argv=None):
         mem = mem[:-1] + "GB"
     if mem.lower().endswith("m"):
         mem = mem[:-1] + "MB"
+    # 纯数字默认单位为MB
+    if mem.isdigit():
+        mem = mem + "MB"
     print(f"Using memory: {mem}, nproc: {nproc}")
-    print(resolved.parent)
+    parser.input_data.mem = mem
+    parser.input_data.nproc = nproc
 
     main_obj = autoVBMain(parser.input_data)
 

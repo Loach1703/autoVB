@@ -17,6 +17,7 @@ export PATH="$MOKIT_BIN:$PATH"
 export PATH="/share/apps/xmvb/latest/bin:$PATH"
 export g16root=/share/apps/g16_avx2
 source /share/apps/g16_avx2/g16/bsd/g16.profile
+module load mpich/4.0.2-gcc13
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
 JOB_MEM=${SLURM_MEM_PER_NODE:-4G}

@@ -2,7 +2,8 @@ import sys
 from pathlib import Path
 import argparse
 from typing import TYPE_CHECKING
-from autoVB import GaussianNBO, XMVBNBO, generate_fch_from_chk
+from autoVB import GaussianNBO, XMVBNBO
+from .utils import generate_fch_from_chk
 from mokit.lib.gaussian import load_mol_from_fch
 from pyscf import gto
 if TYPE_CHECKING:

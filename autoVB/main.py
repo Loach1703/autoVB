@@ -28,6 +28,7 @@ class VBSettings:
     atom_slice: bool = False
     threshold: float = 0
     stru: str = "full"
+    sort: bool = False
 
     def validate(self) -> None:
         """
@@ -103,7 +104,7 @@ class autoVBMain:
         self.input_data = input_data
         filename = self.input_data.filename
         self.nbo_gjf_name = f"{filename}_nbo"
-        self.nbo_gjf_name_upper = f"{filename}_NBO"
+        self.nbo_gjf_name_upper = self.nbo_gjf_name.upper()
         self.xmi_name = f"{filename}_vb"
         self._check_gaussian_env()
         self._check_xmvb_env()
@@ -201,7 +202,15 @@ class autoVBMain:
             # wxp.set_active_space(nae, nao)
         inact, act = wxp.split_inactive_active_orbitals()
         xmi_path = Path(f"{self.xmi_name}.xmi")
-        wxp.write_xmi(inact, act, reorder=reorder, atom_slice=atom_slice, xmi_path=xmi_path, stru_type=self.input_data.vbsettings.stru)
+        wxp.write_xmi(
+            inact, 
+            act, 
+            reorder=reorder, 
+            atom_slice=atom_slice, 
+            xmi_path=xmi_path, 
+            stru_type=self.input_data.vbsettings.stru,
+            method=self.input_data.method
+        )
         # return autovb_xmi_impl(self.xmi_name, mol, basis, nae, nao, active_orbital_atom, threshold, reorder, atom_slice)
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
@@ -231,8 +240,25 @@ class autoVBInputParser:
     '''
     def __init__(self, input_path: Path):
         self.input_path = input_path
+        # command-line-like overrides parsed from method, e.g. vbscf(2,1)
+        self.cmd_nae: int | None = None
+        self.cmd_nao: int | None = None
+
         self.input_data = self.parse()
         settings = self.parse_autovb_options(self.input_data.title)
+
+        # 如果 method 中通过 vbscf(nae,nao) 提供了显式值，则覆盖 settings
+        if self.cmd_nae is not None or self.cmd_nao is not None:
+            # warn if settings already specified nao/nae
+            if getattr(settings, 'nae', 0) and getattr(settings, 'nao', 0):
+                print("!"*40)
+                print(f"Warning: VBSettings in input file contains 'nae' and 'nao' but method provided overrides; using method values {self.cmd_nae},{self.cmd_nao} and ignoring commandline values.")
+                print("!"*40)
+            if self.cmd_nae is not None:
+                settings.nae = int(self.cmd_nae)
+            if self.cmd_nao is not None:
+                settings.nao = int(self.cmd_nao)
+
         self.input_data.vbsettings = settings
 
     def parse(self) -> autoVBInputData:
@@ -245,8 +271,21 @@ class autoVBInputParser:
             key: str = i[0]
             if "/" in key:
                 method_basis = key.split('/')
-                method = method_basis[0].lower()
+                method_raw = method_basis[0].strip()
                 basis = method_basis[1]
+
+                # 解析形如 vbscf(2,1) 的结构
+                m = re.fullmatch(r"([A-Za-z0-9_+-]+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", method_raw)
+                if m:
+                    method = m.group(1).lower()
+                    try:
+                        self.cmd_nae = int(m.group(2))
+                        self.cmd_nao = int(m.group(3))
+                    except Exception:
+                        raise ValueError(f"Failed to parse nae/nao from method specification: {method_raw}")
+                else:
+                    method = method_raw.lower()
+
                 if method not in SUPPORTED_METHODS:
                     raise ValueError(f"Unsupported method: {method}. Supported methods are: {SUPPORTED_METHODS}")
                 break
@@ -321,7 +360,7 @@ class autoVBInputParser:
 
         inner = m.group(1)
         pattern = r'\s*(?:\([^()]*\)|[^,])+\s*'
-        pair_list = [p.strip() for p in re.findall(pattern, inner) if p.strip()]
+        pair_list: list[str] = [p.strip() for p in re.findall(pattern, inner) if p.strip()]
         settings = VBSettings()
         for pair in pair_list:
             if "=" not in pair:
@@ -343,6 +382,8 @@ class autoVBInputParser:
                 print(f"Warning: failed to parse value for key '{key}' with raw value '{value}'. Error: {e}. Skipping this option.")
                 continue
         
+        # TODO nao和nae可以在method里输入
+
         # 验证 VBSettings 合法性（若不合法会抛错并中止流程）
         settings.validate()
 
