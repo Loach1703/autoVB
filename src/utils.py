@@ -3,11 +3,13 @@ import re
 import os
 import shutil
 import subprocess
+import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .constants import D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3
 if TYPE_CHECKING:
     from pyscf import gto
+    from .main import XMIData
 
 def build_shift_map(offset: int, base: dict[int, int]) -> dict[int, int]:
     """
@@ -649,6 +651,9 @@ def export_raw_molden(mol_obj: 'gto.Mole', filename, coefficient_matrix: np.ndar
                 f.write(f" {j+1:4d} {coefficient_matrix[j, i]:20.10e}\n")
 
 def generate_fch_from_chk(chkname: str, fchname: str, formchk_path: str = 'formchk'):
+    '''
+    使用 Gaussian 的 formchk 工具将 .chk 文件转换为 .fch 文件。
+    '''
     print(f"Running formchk to generate {fchname}...")
 
     result = subprocess.run(

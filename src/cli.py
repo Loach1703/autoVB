@@ -2,13 +2,11 @@
 import argparse
 from pathlib import Path
 import sys
-import os
-from time import sleep
 
 from .commands import autovb_nbo_impl, autovb_xmi_impl
-from .main import autoVBMain, autoVBInputParser
-from .autoVB import XMVBNBO
-from .utils import generate_fch_from_chk
+from .main import autoVBMain, autoVBInputParser, XMVBNBO, autoVBInputData, VBSettings
+from .utils import generate_fch_from_chk, pyscf_to_xyz
+from .constants import VERSION
 from mokit.lib.gaussian import load_mol_from_fch
 
 def autovb_nbo(argv=None):
@@ -74,11 +72,29 @@ def autovb_xmi(argv=None):
     nae = args.active_electron
     nao = args.active_orbital
     threshold = args.threshold if hasattr(args, 'threshold') else 1.9
+    geometry = pyscf_to_xyz(mol)
+    atvb_input = autoVBInputData(
+        title=name,
+        filepath=p,
+        filename=p.stem,
+        method='vbscf',
+        basis=args.basis,
+        geometry=geometry,
+    )
+    vbsetting = VBSettings(
+        nae=nae,
+        nao=nao,
+        aoa=aoa,
+        threshold=threshold,
+        reorder=args.reorder,
+        atom_slice=args.slice,
+    )
+    atvb_input.vbsettings = vbsetting
 
     return autovb_xmi_impl(name, mol, args.basis, nae, nao, aoa, threshold, args.reorder, args.slice)
 
 def autovb_main(argv=None):
-    print("Welcome to autoVB! Version 0.1.0")
+    print(f"Welcome to autoVB! Version {VERSION}")
 
     argv = list(argv) if argv is not None else sys.argv[1:]
     if not argv:
@@ -128,7 +144,7 @@ def autovb_main(argv=None):
     print("autoVB workflow completed successfully!")
 
 def autovb_test():
-    input_file = Path('C4H6.autovb')
+    input_file = Path('5931.autovb')
     resolved = input_file.resolve()
     parser = autoVBInputParser(input_file)
     mem = "4GB"

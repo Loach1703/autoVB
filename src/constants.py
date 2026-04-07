@@ -1,5 +1,6 @@
 import re
 
+VERSION = "0.1.1"
 FLOAT_RE = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$')
 BASIS_FUNCTION_DICT = {
     'S': 'S',
@@ -29,4 +30,6 @@ D_ORBITAL_3TO4 = {0: 0, 1: 3, 2: 5, 3: 1, 4: 2, 5: 4}
 D_ORBITAL_4TO3 = {0: 0, 1: 3, 2: 4, 3: 1, 4: 5, 5: 2}
 F_ORBITAL_3TO4 = {0: 0, 1: 6, 2: 9, 3: 1, 4: 2, 5: 3, 6: 7, 7: 5, 8: 8, 9: 4}
 F_ORBITAL_4TO3 = {0: 0, 1: 3, 2: 4, 3: 5, 4: 9, 5: 7, 6: 1, 7: 6, 8: 8, 9: 2}
-SUPPORTED_METHODS = ["vbscf", "vbpt2", "lam-dfvb"]
+
+STRU_CHOICES = ["full", "cov", "ion()"]
+SUPPORTED_METHODS = ["vbscf", "vbpt2", "lam-dfvb", "bovb", "blw"]
