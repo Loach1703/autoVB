@@ -5,8 +5,8 @@ import numpy as np
 import datetime
 from pathlib import Path
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, TYPE_CHECKING, get_origin, get_type_hints
+from dataclasses import dataclass, field, fields
+from typing import Dict, List, Tuple, Optional, TYPE_CHECKING, get_origin, get_type_hints, get_args, Union
 from collections import Counter
 
 from .constants import FLOAT_RE, BASIS_FUNCTION_DICT, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3, SUPPORTED_METHODS, STRU_CHOICES
@@ -47,6 +47,8 @@ class VBSettings:
     threshold: float = 0
     stru: str = "full"
     sort: bool = False
+    novb: bool = False
+    nbo_file: Path = None
 
     def validate(self) -> None:
         """
@@ -66,6 +68,7 @@ class VBSettings:
             raise ValueError("VBSettings: 'threshold' must be >= 0")
 
         self.validate_stru()
+        self.validate_nbo_file()
 
     def validate_stru(self) -> None:
         # stru 检查：合法值为 'full', 'cov', 或 'ion(...)'
@@ -98,6 +101,13 @@ class VBSettings:
             return
 
         raise ValueError("VBSettings: invalid contents for ion(...). Use comma-separated integers or a single range a-b.")
+
+    def validate_nbo_file(self) -> None:
+        if self.nbo_file is not None:
+            self.nbo_file = Path(self.nbo_file)
+            # 检查文件是否存在
+            if not self.nbo_file.is_file():
+                raise ValueError(f"VBSettings: 'nbo_file' {self.nbo_file} does not exist or is not a file")
 
 @dataclass
 class autoVBInputData:
@@ -1043,11 +1053,21 @@ class XMVBNBO:
         threshold = min(float(valid_occupations.min()) + 0.1, 1.96)
         nae, nao = self.auto_select_active_space(threshold=threshold, auto_set=False)
         # 检查选出的活性轨道数量
-        print(f"Automatically selected active space with threshold {threshold:.2f}: {nae} electrons / {nao} orbitals")
-        if nao >= 12 or nae >= 12:
+        print(f"Automatically selected active space with threshold {threshold:.2f}: {nae} electrons / {nao} orbitals.")
+        # 如果活性轨道过多，则降低活性空间的选择阈值
+        if nao >= 15 or nae >= 15:
+            print(f"Warning: Automatically selected active space has  {nae} electrons / {nao} orbitals, trying to reduce the threshold to select fewer active orbitals......")
+            for _ in range(10):
+                if nao < 15:
+                    break
+                threshold -= 0.1
+                nae, nao = self.auto_select_active_space(threshold=threshold, auto_set=False)
+                print(f"Trying threshold {threshold:.2f}: {nae} electrons / {nao} orbitals")
+        # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
+        if nao >= 15 or nae >= 15:
+            print('!'*40)
             print(f"Warning: Automatically selected active space has  {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
-        if nao >= 20 or nae >= 20:
-            raise ValueError(f"Error: Automatically selected active space has  {nae} electrons / {nao} orbitals, which is likely too large for VB calculations. Please manually select the active space.")
+            print('!'*40)
         if auto_set:
             print(f"Automatically setting active space: {nae} electrons / {nao} orbitals")
             self.set_active_space(nae, nao)
@@ -1077,6 +1097,14 @@ class XMVBNBO:
             basis_set (str): 基组名称，例如 'cc-pVDZ'
         '''
         self.basis_set = basis_set
+
+    def set_active_indices(self, active_indices: List[int]) -> None:
+        '''
+        设置活性轨道的索引（注意是从0开始计数）
+        Args:
+            active_indices (List[int]): 活性轨道的索引列表
+        '''
+        self.active_indices = active_indices
 
     def get_active_orbital_indices(self) -> List[int]:
         '''
@@ -1252,57 +1280,49 @@ class XMVBNBO:
             orb_text += '\n'
         return (head_text, orb_text)
     
-    def get_init_guess_active(self, orbital_matrix: np.ndarray, reorder=True, atom_slice=True) -> Tuple[str, str]:
+    def get_init_guess_active(self, orbital_matrix: np.ndarray) -> Tuple[str, str]:
         '''
         获取 XMVB .xmi 文件中的 $gus 文本，适合活性轨道
         Args:
             orbital_matrix (np.ndarray): 二维轨道矩阵
-            reorder (bool): 是否需要将活性轨道的原子顺序调整为从小到大（这样可能可以生成遵循Rumer规则的结构），默认True
-            atom_slice (bool): 是否需要将轨道切片为单原子轨道（即制作单原子 VB 定域初猜），默认True
         Returns:
             tuple (Tuple[str, str]): $gus 部分文本，前端为头文本，后端为轨道文本
         '''
+        # 生成活性原子：活性轨道的映射关系
         oac = get_orbital_atom_contribution(orbital_matrix, self.mol)
         atoms_num = [j for i in oac for j in i]
 
-        reordered_orbitals = []
-        calculation_actorb_count = 0
-        for i, oac_item in enumerate(oac):
-            new_orb = orbital_matrix[i] 
+        atom_orb_dict = {}
+        for orb, oac_item in zip(orbital_matrix, oac):
             # 根据轨道数量看需要复制多少份，同时计算活性轨道数量
-            for _ in oac_item:
-                calculation_actorb_count += 1
-                reordered_orbitals.append(new_orb)
-
-        if calculation_actorb_count != self.active_orbital:
-            raise ValueError(f"Calculated active orbital count ({calculation_actorb_count}) does not match expected active orbital count ({self.active_orbital}). Check active space settings.")
-                
-        # 重新赋值为排序并拆解后的轨道矩阵 (此时轨道数变为原来的两倍)
-        orbital_matrix = np.array(reordered_orbitals)
-
-        # 将分子轨道切割为原子轨道
-        # TODO 有时候切割会错误，待查，似乎是因为get_orb_section_active方法以前没有重排选项导致的，现在好像已经修好了
-        if atom_slice:
-            sliced_orbitals = []
-            for i, atom in enumerate(atoms_num):
-                sliced_orb = self.get_atom_sliced_orbital(orbital_matrix[i], atom)
-                sliced_orbitals.append(sliced_orb)
-            orbital_matrix = np.array(sliced_orbitals)
+            for j in oac_item:
+                if self.input_data.vbsettings.atom_slice:
+                    new_orb = self.get_atom_sliced_orbital(orb, j)
+                    atom_orb_dict[j] = new_orb
+                else:
+                    atom_orb_dict[j] = orb
+        
+        if len(atom_orb_dict) != self.active_orbital:
+            raise ValueError(f"Calculated active orbital count ({len(atom_orb_dict)}) does not match expected active orbital count ({self.active_orbital}). Check active space settings.")
+        
+        # 根据aoa设置的原子顺序重新排序轨道
+        if self.input_data.vbsettings.aoa:
+            atom_orb_dict_reordered = {}
+            for atom in self.input_data.vbsettings.aoa:
+                if atom not in atom_orb_dict:
+                    raise ValueError(f"Active atom {atom} specified in aoa is not found in the active orbitals. Check active space settings.")
+                atom_orb_dict_reordered[atom] = atom_orb_dict[atom]
+            atom_orb_dict = atom_orb_dict_reordered
 
         # 重新排序
-        if reorder:
-            # 获取按照原子序号从小到大排序的索引
-            sorted_indices = np.argsort(atoms_num)
-            # 根据排序后的索引，同时重排轨道矩阵和对应的原子编号列表
-            orbital_matrix = orbital_matrix[sorted_indices]
-            atoms_num = [atoms_num[idx] for idx in sorted_indices]
+        if self.input_data.vbsettings.reorder:
+            atom_orb_dict = {k: atom_orb_dict[k] for k in sorted(atom_orb_dict)}
 
-        head_text = (' ' + str(orbital_matrix.shape[1])) * orbital_matrix.shape[0]
+        head_text = (' ' + str(orbital_matrix.shape[1])) * len(atom_orb_dict)
         orb_text = ''
-        # TODO 支持（7，8）这样的活性空间，目前会报错
         # 26/3/19 已经完成支持（7，8）这样的活性空间了
-        for i, orb in enumerate(orbital_matrix):
-            orb_text += f'# ACTIVE ORBITAL        {i+1}  NAO =    {len(orb)} Localization in atom {atoms_num[i]}{self.mol.atom_pure_symbol(atoms_num[i]-1)}\n'
+        for i, (atom, orb) in enumerate(atom_orb_dict.items()):
+            orb_text += f'# ACTIVE ORBITAL        {i+1}  NAO =    {len(orb)} Localization in atom {atom}{self.mol.atom_pure_symbol(atom-1)}\n'
             orb_text += make_xmvb_format_text(orb, per_line=4)
             orb_text += '\n'
         return (head_text, orb_text)
@@ -1375,7 +1395,7 @@ class XMVBNBO:
         orb_section = f'{orb_number_text}\n{inactive_text}{active_text}'
 
         inact_head, inact_guess = self.get_init_guess_inactive(inactive_orbital_matrix)
-        act_head, act_guess = self.get_init_guess_active(active_orbital_matrix, reorder=vbsetting.reorder, atom_slice=vbsetting.atom_slice)
+        act_head, act_guess = self.get_init_guess_active(active_orbital_matrix)
         # 拼装初猜文本
         init_guess_text = (
             inact_head + act_head + '\n' +
@@ -1391,7 +1411,7 @@ class XMVBNBO:
                 stru_type = 'full'
 
         xmidata = XMIData(
-            molecule_name=self.formula,
+            molecule_name=self.filename,
             method=self.input_data.method,
             stru_type=stru_type,
             int_type=vbsetting.inte,
@@ -1420,38 +1440,13 @@ class GaussianNBO:
         self.mol = mol
         self.geometry_text = pyscf_to_xyz(self.mol)
 
-    def read_xyz_file(self, filename: str) -> str:
-        '''
-        这是AI写的，目前没有用！
-        从XYZ文件中读取几何坐标，返回适合Gaussian输入文件的格式
-        Args:
-            filename (str): XYZ文件名（带后缀）
-        Returns:
-            str: 适合Gaussian输入文件的几何坐标文本
-        '''
-        with open(filename, 'r') as f:
-            lines = f.readlines()
-        
-        # 跳过前两行（原子数和注释），从第三行开始是原子坐标
-        geo_lines = []
-        for line in lines[2:]:
-            parts = line.split()
-            if len(parts) < 4:
-                continue  # 跳过格式不正确的行
-            sym = parts[0]
-            x, y, z = parts[1:4]
-            geo_lines.append(f"{sym:2s}  {x:12.8f}  {y:12.8f}  {z:12.8f}")
-        
-        geometry_text = "\n".join(geo_lines)
-        return geometry_text
-
     def write_gjf(self, mem: str='4GB', nproc: int=4):
         filetext = f'''%chk={self.filename}.chk
 %mem={mem}
 %nprocshared={nproc}
 #p rhf/{self.mol.basis} pop=nboread nosymm int(nobasistransform) 6D 10F
 
-{self.filename}
+{self.filename} generated by autoVB
 
 {self.mol.charge} {self.mol.spin + 1}
 {self.geometry_text}
@@ -1472,10 +1467,10 @@ class autoVBMain:
         self.input_data = input_data
         filename = self.input_data.filename
         self.nbo_gjf_name = f"{filename}_nbo"
-        self.nbo_gjf_name_upper = self.nbo_gjf_name.upper()
         self.xmi_name = f"{filename}_vb"
         self._check_gaussian_env()
-        self._check_xmvb_env()
+        if not self.input_data.vbsettings.novb:
+            self._check_xmvb_env()
 
     def _check_gaussian_env(self):
         self.gaussian_exe = find_executable_in_env()
@@ -1538,16 +1533,16 @@ class autoVBMain:
         threshold = self.input_data.vbsettings.threshold
 
         # 检查nbo输出文件是否存在，是大写还是小写
-        nbo_out_path_upper = Path(f"{self.nbo_gjf_name_upper}.37")
+        nbo_out_path_upper = Path(f"{self.nbo_gjf_name.upper()}.37")
         nbo_out_path_lower = Path(f"{self.nbo_gjf_name}.37")
         if nbo_out_path_upper.exists():
-            self.nbo_gjf_name_true = self.nbo_gjf_name_upper
+            self.nbo_gjf_name_true = nbo_out_path_upper
         elif nbo_out_path_lower.exists():
-            self.nbo_gjf_name_true = self.nbo_gjf_name
+            self.nbo_gjf_name_true = nbo_out_path_lower
         else:
             raise RuntimeError(f"can not find NBO output file for {self.nbo_gjf_name}, may be Gaussian NBO calculation did not finish successfully.")
 
-        wxp = XMVBNBO(self.nbo_gjf_name_true, mol, self.input_data)
+        wxp = XMVBNBO(self.nbo_gjf_name_true.stem, mol, self.input_data)
         wxp.set_basis_set(basis)
         self.wxp = wxp
         
@@ -1601,6 +1596,30 @@ class autoVBMain:
         xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {self.xmi_name}.xmi 1> {self.xmi_name}.xmo  2> {self.xmi_name}.err"
         self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {self.xmi_name}.xmi.", f"XMVB execution failed for {self.xmi_name}.xmi, check {self.xmi_name}.xmo for details.")
 
+    def main(self):
+        if self.input_data.vbsettings.nbo_file:
+            self.nbo_gjf_name = self.input_data.vbsettings.nbo_file.stem
+            print(f"User specified the NBO file directly, skipping Gaussian NBO calculation. NBO file: {self.input_data.vbsettings.nbo_file}")
+        else:
+            print("="*40)
+            print("Entry Gaussian NBO Calculation")
+            print("="*40)
+            self.generate_gjf_from_geo()
+            self.run_gaussian(self.nbo_gjf_name)
+            self.run_formchk(self.nbo_gjf_name)
+
+        print("="*40)
+        print("Entry XMVB Calculation")
+        print("="*40)
+        self.generate_nbo_to_xmi()
+        if self.input_data.vbsettings.novb:
+            print("VB calculation is skipped due to novb setting.(only generate xmi file from NBO orbitals)")
+        else:
+            self.run_xmvb()
+
+        print("="*40)
+        print("autoVB workflow completed successfully!")
+
 class autoVBInputParser:
     '''
     解析输入文件，提取必要的信息，如分子结构、基组、计算参数等
@@ -1611,7 +1630,8 @@ class autoVBInputParser:
         self.cmd_nae: int | None = None
         self.cmd_nao: int | None = None
 
-        self.input_data = self.parse()
+        # 检查输入文件的后缀
+        self.input_data = self.parse_gaussian()
         settings = self.parse_autovb_options(self.input_data.title)
 
         # 如果 method 中通过 vbscf(nae,nao) 提供了显式值，则覆盖 settings
@@ -1628,7 +1648,12 @@ class autoVBInputParser:
 
         self.input_data.vbsettings = settings
 
-    def parse(self) -> autoVBInputData:
+    def parse_xmi(self) -> autoVBInputData:
+        # 解析 .xmi 文件的输入数据
+        # TODO 实现 .xmi 文件的解析
+        raise NotImplementedError("Parsing .xmi input files is not implemented yet.")
+
+    def parse_gaussian(self) -> autoVBInputData:
         with GaussianInFile(self.input_path) as input_file:
             input_file.read()
         # 输出文件内容
@@ -1678,7 +1703,16 @@ class autoVBInputParser:
         return atvb_input
     
     def parse_value_by_type(self, raw: str, target_type, key: str):
-        raw = raw.strip()
+        if isinstance(raw, str):
+            raw = raw.strip()
+        origin = get_origin(target_type)
+        # print(f"Parsing value for key '{key}': raw='{raw}', target_type={target_type}, origin={origin}")
+        if get_origin(target_type) == Union:
+            actual_types = get_args(target_type)
+            target_type = actual_types[0]
+
+        if isinstance(raw, bool) and target_type is bool:
+            return raw
         # 布尔判断（支持 1/0/true/false/yes/no）
         if target_type is bool:
             return raw.lower() in ("1", "true", "yes", "y")
@@ -1692,7 +1726,6 @@ class autoVBInputParser:
         if target_type is float:
             return float(raw)
         # 列表（尝试解析数字或字符串列表）
-        origin = get_origin(target_type)
         if origin is list or target_type is list:
             s = raw
             # 去除括号/中括号
@@ -1713,6 +1746,8 @@ class autoVBInputParser:
                 if all(isinstance(x, int) for x in parsed):
                     return [parsed[i : i + 2] for i in range(0, len(parsed), 2)]
             return parsed
+        if target_type is Path:
+            return Path(raw)
         # 默认当字符串返回（去掉外层单/双引号）
         if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
             return raw[1:-1]
@@ -1734,6 +1769,7 @@ class autoVBInputParser:
         pair_list: list[str] = [p.strip() for p in re.findall(pattern, inner) if p.strip()]
         settings = VBSettings()
         type_hints = get_type_hints(VBSettings)
+
         for pair in pair_list:
             if "=" not in pair:
                 key = pair.strip()

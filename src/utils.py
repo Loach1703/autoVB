@@ -24,13 +24,14 @@ def build_shift_map(offset: int, base: dict[int, int]) -> dict[int, int]:
     """
     return {offset + k: offset + v for k, v in base.items()}
 
-def make_xmvb_format_text(arr: np.ndarray, per_line: int = 4) -> str:
+def make_xmvb_format_text(arr: np.ndarray, per_line: int = 4, ignore_zero: bool = False) -> str:
     """
     将一维浮点数组格式化为固定小数位输出（XMVB .orb文件格式）
     每个数字后跟其序号（从1开始），每行输出per_line个。
     Args:
         arr: np.ndarray 一维浮点数组
         per_line: int 每行输出的项数，默认4
+        ignore_zero: bool 是否忽略值为0的元素
     Returns:
         str: 格式化后的字符串
     """

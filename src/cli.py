@@ -126,22 +126,7 @@ def autovb_main(argv=None):
     parser.input_data.nproc = nproc
 
     main_obj = autoVBMain(parser.input_data)
-
-    print("="*40)
-    print("Entry Gaussian NBO Calculation")
-    print("="*40)
-    main_obj.generate_gjf_from_geo()
-    main_obj.run_gaussian(main_obj.nbo_gjf_name)
-    main_obj.run_formchk(main_obj.nbo_gjf_name)
-
-    print("="*40)
-    print("Entry XMVB Calculation")
-    print("="*40)
-    main_obj.generate_nbo_to_xmi()
-    main_obj.run_xmvb()
-
-    print("="*40)
-    print("autoVB workflow completed successfully!")
+    main_obj.main()
 
 def autovb_test():
     input_file = Path('5931.autovb')
