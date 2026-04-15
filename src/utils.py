@@ -11,6 +11,26 @@ if TYPE_CHECKING:
     from pyscf import gto
     from .main import XMIData
 
+def print_warning(message: str):
+    """
+    打印警告信息。
+    Args:
+        message (str): 警告信息内容
+    """
+    print("!" * 40)
+    print(f"Warning: {message}")
+    print("!" * 40)
+
+def print_subroutine(message: str):
+    """
+    打印子程序信息。
+    Args:
+        message (str): 子程序信息内容
+    """
+    print("=" * 40)
+    print(f"{message}")
+    print("=" * 40)
+
 def build_shift_map(offset: int, base: dict[int, int]) -> dict[int, int]:
     """
     将 base 的键值整体平移 offset。

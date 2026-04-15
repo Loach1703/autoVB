@@ -4,8 +4,9 @@ from pathlib import Path
 import sys
 
 from .commands import autovb_nbo_impl, autovb_xmi_impl
-from .main import autoVBMain, autoVBInputParser, XMVBNBO, autoVBInputData, VBSettings
-from .utils import generate_fch_from_chk, pyscf_to_xyz
+from .main import autoVBMain, XMVBNBO, autoVBInputData, VBSettings
+from .readers import autoVBInputParser
+from .utils import generate_fch_from_chk, pyscf_to_xyz, print_warning, print_subroutine
 from .constants import VERSION
 from mokit.lib.gaussian import load_mol_from_fch
 
@@ -129,7 +130,7 @@ def autovb_main(argv=None):
     main_obj.main()
 
 def autovb_test():
-    input_file = Path('5931.autovb')
+    input_file = Path('C4H6.autovb')
     resolved = input_file.resolve()
     parser = autoVBInputParser(input_file)
     mem = "4GB"
@@ -139,7 +140,5 @@ def autovb_test():
 
     main_obj = autoVBMain(parser.input_data)
 
-    print("="*40)
-    print("Entry XMVB Calculation")
-    print("="*40)
+    print_subroutine("Entry XMVB Calculation")
     main_obj.generate_nbo_to_xmi()

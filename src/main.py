@@ -5,8 +5,8 @@ import numpy as np
 import datetime
 from pathlib import Path
 
-from dataclasses import dataclass, field, fields
-from typing import Dict, List, Tuple, Optional, TYPE_CHECKING, get_origin, get_type_hints, get_args, Union
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
 from collections import Counter
 
 from .constants import FLOAT_RE, BASIS_FUNCTION_DICT, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3, SUPPORTED_METHODS, STRU_CHOICES
@@ -23,11 +23,12 @@ from .utils import (
     read_nbo_orbital,
     find_executable_in_env,
     find_tool,
+    print_subroutine,
+    print_warning,
 )
 from .writers import write_xmi_file
 
 from mokit.lib.gaussian import load_mol_from_fch
-from pyssian import GaussianInFile
 from pyscf import gto
 
 @dataclass
@@ -110,6 +111,14 @@ class VBSettings:
                 raise ValueError(f"VBSettings: 'nbo_file' {self.nbo_file} does not exist or is not a file")
 
 @dataclass
+class XMIPassthrough:
+    '''
+    存储从输入 .xmi 中透传到输出 .xmi 的附加信息
+    '''
+    ctrl_extra_lines: list[str] = field(default_factory=list)
+    str_section_text: Optional[str] = None
+
+@dataclass
 class autoVBInputData:
     '''
     定义输入数据结构，包含方法、基组、分子结构、计算参数等
@@ -125,6 +134,7 @@ class autoVBInputData:
     mem: str = "4GB"
     nproc: int = 1
     vbsettings: VBSettings = field(default_factory=VBSettings)
+    xmi_passthrough: XMIPassthrough = field(default_factory=XMIPassthrough)
 
 @dataclass
 class XMIData:
@@ -1065,9 +1075,7 @@ class XMVBNBO:
                 print(f"Trying threshold {threshold:.2f}: {nae} electrons / {nao} orbitals")
         # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
         if nao >= 15 or nae >= 15:
-            print('!'*40)
-            print(f"Warning: Automatically selected active space has  {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
-            print('!'*40)
+            print_warning(f"Automatically selected active space has  {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
         if auto_set:
             print(f"Automatically setting active space: {nae} electrons / {nao} orbitals")
             self.set_active_space(nae, nao)
@@ -1424,7 +1432,51 @@ class XMVBNBO:
             geo_section=self.geometry_text,
             init_guess_section=init_guess_text,
         )
-        write_xmi_file(xmi_path, xmidata)
+        passthrough = self.input_data.xmi_passthrough
+        write_xmi_file(xmi_path, xmidata, passthrough)
+        print(f"Wrote XMVB .xmi to {xmi_path}")
+    
+    def write_xmi_blw(self, 
+                  orbital_matrix: np.ndarray,
+                  xmi_path: Path = None,
+                  ) -> None:
+        vbsetting = self.input_data.vbsettings
+        nae = 2
+        nao = 1
+        stru_type = 'full'
+        method = 'vbscf'
+        if not xmi_path:
+            xmi_path = Path(f'{self.filename}.xmi')
+
+        # 获取orb部分
+        inactive_head, inactive_text = self.get_orb_section_inactive(orbital_matrix)
+        inactive_text = inactive_text.strip("\n")
+        orb_number_text = f'{inactive_head}'
+        orb_section = f'{orb_number_text}\n{inactive_text}'
+
+        inact_head, inact_guess = self.get_init_guess_inactive(orbital_matrix)
+        # 拼装初猜文本
+        init_guess_text = (
+            inact_head + '\n' +
+            inact_guess.strip("\n")
+        )
+
+        xmidata = XMIData(
+            molecule_name=self.filename,
+            method=method,
+            stru_type=stru_type,
+            int_type=vbsetting.inte,
+            iscf=vbsetting.iscf,
+            nae=nae,
+            nao=nao,
+            basis_set=self.basis_set,
+            sort=vbsetting.sort,
+            orb_section=orb_section,
+            geo_section=self.geometry_text,
+            init_guess_section=init_guess_text,
+        )
+        passthrough = self.input_data.xmi_passthrough
+        write_xmi_file(xmi_path, xmidata, passthrough)
         print(f"Wrote XMVB .xmi to {xmi_path}")
 
 class GaussianNBO:
@@ -1468,6 +1520,7 @@ class autoVBMain:
         filename = self.input_data.filename
         self.nbo_gjf_name = f"{filename}_nbo"
         self.xmi_name = f"{filename}_vb"
+        self.blw_name = f"{filename}_blw"
         self._check_gaussian_env()
         if not self.input_data.vbsettings.novb:
             self._check_xmvb_env()
@@ -1545,35 +1598,50 @@ class autoVBMain:
         wxp = XMVBNBO(self.nbo_gjf_name_true.stem, mol, self.input_data)
         wxp.set_basis_set(basis)
         self.wxp = wxp
-        
-        if active_orbital_atom:
-            if nao == 0 or nae == 0:
-                gaoi = wxp.get_active_orbital_indices_from_active_atoms(active_orbital_atom)
-                nao = len(active_orbital_atom)
-                nae = len(gaoi) * 2
-            wxp.set_active_space(nae, nao)
-        elif aoa_old:
-            if nao == 0 or nae == 0:
-                gaoi = wxp.get_active_orbital_indices_from_aoa_old(aoa_old)
-                nao = len(aoa_old)
-                nae = len(gaoi) * 2
-            wxp.set_active_space(nae, nao)
-        elif nae > 0 and nao > 0:
-            wxp.set_active_space(nae, nao)
-        elif threshold > 1:
-            nae, nao = wxp.auto_select_active_space(threshold=threshold, auto_set=True)
+
+        # BLW方法，本质是2e1o的VBSCF
+        if self.input_data.method.lower() == 'blw':
+            print("BLW method detected, no active space will be set.")
+            orb_matrix = wxp.occupation_orbital_matrix
+            xmi_path = Path(f"{self.blw_name}.xmi")
+            wxp.write_xmi_blw(
+                orb_matrix,
+                xmi_path=xmi_path,
+            )
+
         else:
-            nae, nao = wxp.auto_select_active_space_iter(auto_set=True)
-            # nae, nao = wxp.auto_select_active_space(threshold=threshold, auto_set=True)
-            # wxp.set_active_space(nae, nao)
-        inact, act = wxp.split_inactive_active_orbitals()
-        xmi_path = Path(f"{self.xmi_name}.xmi")
-        wxp.write_xmi(
-            inact, 
-            act,
-            xmi_path=xmi_path,
-        )
-        # return autovb_xmi_impl(self.xmi_name, mol, basis, nae, nao, active_orbital_atom, threshold, reorder, atom_slice)
+            # 设置活性空间
+            # aoa参数，根据原子来判断活性轨道
+            if active_orbital_atom:
+                if nao == 0 or nae == 0:
+                    gaoi = wxp.get_active_orbital_indices_from_active_atoms(active_orbital_atom)
+                    nao = len(active_orbital_atom)
+                    nae = len(gaoi) * 2
+                wxp.set_active_space(nae, nao)
+            # 保留aoa_old参数的兼容性，但不推荐使用
+            elif aoa_old:
+                if nao == 0 or nae == 0:
+                    gaoi = wxp.get_active_orbital_indices_from_aoa_old(aoa_old)
+                    nao = len(aoa_old)
+                    nae = len(gaoi) * 2
+                wxp.set_active_space(nae, nao)
+            # 手动指定了活性空间，但没有aoa
+            elif nae > 0 and nao > 0:
+                wxp.set_active_space(nae, nao)
+            # 手动设置了挑选阈值
+            elif threshold > 1:
+                nae, nao = wxp.auto_select_active_space(threshold=threshold, auto_set=True)
+            # 没有任何设置，自动挑选
+            else:
+                nae, nao = wxp.auto_select_active_space_iter(auto_set=True)
+
+            inact, act = wxp.split_inactive_active_orbitals()
+            xmi_path = Path(f"{self.xmi_name}.xmi")
+            wxp.write_xmi(
+                inact, 
+                act,
+                xmi_path=xmi_path,
+            )
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
         print(f"Running command: {command}")
@@ -1593,204 +1661,28 @@ class autoVBMain:
         self.run_subprocess_command(formchk_cmd, f"formchk execution completed successfully for {input_name}.chk.", f"formchk execution failed for {input_name}.chk, may be Gaussian calculation failed.")
 
     def run_xmvb(self):
-        xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {self.xmi_name}.xmi 1> {self.xmi_name}.xmo  2> {self.xmi_name}.err"
-        self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {self.xmi_name}.xmi.", f"XMVB execution failed for {self.xmi_name}.xmi, check {self.xmi_name}.xmo for details.")
+        if self.input_data.method.lower() == 'blw':
+            filename = self.blw_name
+        else:
+            filename = self.xmi_name
+        xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {filename}.xmi 1> {filename}.xmo  2> {filename}.err"
+        self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {filename}.xmi.", f"XMVB execution failed for {filename}.xmi, check {filename}.xmo for details.")
 
     def main(self):
         if self.input_data.vbsettings.nbo_file:
             self.nbo_gjf_name = self.input_data.vbsettings.nbo_file.stem
             print(f"User specified the NBO file directly, skipping Gaussian NBO calculation. NBO file: {self.input_data.vbsettings.nbo_file}")
         else:
-            print("="*40)
-            print("Entry Gaussian NBO Calculation")
-            print("="*40)
+            print_subroutine("Entry Gaussian NBO Calculation")
             self.generate_gjf_from_geo()
             self.run_gaussian(self.nbo_gjf_name)
             self.run_formchk(self.nbo_gjf_name)
 
-        print("="*40)
-        print("Entry XMVB Calculation")
-        print("="*40)
+        print_subroutine("Entry XMVB Calculation")
         self.generate_nbo_to_xmi()
         if self.input_data.vbsettings.novb:
             print("VB calculation is skipped due to novb setting.(only generate xmi file from NBO orbitals)")
         else:
             self.run_xmvb()
 
-        print("="*40)
-        print("autoVB workflow completed successfully!")
-
-class autoVBInputParser:
-    '''
-    解析输入文件，提取必要的信息，如分子结构、基组、计算参数等
-    '''
-    def __init__(self, input_path: Path):
-        self.input_path = input_path
-        # command-line-like overrides parsed from method, e.g. vbscf(2,1)
-        self.cmd_nae: int | None = None
-        self.cmd_nao: int | None = None
-
-        # 检查输入文件的后缀
-        self.input_data = self.parse_gaussian()
-        settings = self.parse_autovb_options(self.input_data.title)
-
-        # 如果 method 中通过 vbscf(nae,nao) 提供了显式值，则覆盖 settings
-        if self.cmd_nae is not None or self.cmd_nao is not None:
-            # warn if settings already specified nao/nae
-            if getattr(settings, 'nae', 0) and getattr(settings, 'nao', 0):
-                print("!"*40)
-                print(f"Warning: VBSettings in input file contains 'nae' and 'nao' but method provided overrides; using method values {self.cmd_nae},{self.cmd_nao} and ignoring commandline values.")
-                print("!"*40)
-            if self.cmd_nae is not None:
-                settings.nae = int(self.cmd_nae)
-            if self.cmd_nao is not None:
-                settings.nao = int(self.cmd_nao)
-
-        self.input_data.vbsettings = settings
-
-    def parse_xmi(self) -> autoVBInputData:
-        # 解析 .xmi 文件的输入数据
-        # TODO 实现 .xmi 文件的解析
-        raise NotImplementedError("Parsing .xmi input files is not implemented yet.")
-
-    def parse_gaussian(self) -> autoVBInputData:
-        with GaussianInFile(self.input_path) as input_file:
-            input_file.read()
-        # 输出文件内容
-        with open(self.input_path, 'r') as f:
-            print(f"Content of input file {self.input_path}:\n{'='*40}\n{f.read()}\n{'='*40}")
-        # method和basis不会自动读取，原因是GaussianInFile不支持VB方法的读取，它会识别成一整个参数
-        # 识别包含VB或/的行，提取method和basis
-        cmd_line = input_file.commandline
-        for i in cmd_line.items():
-            key: str = i[0]
-            if "/" in key:
-                method_basis = key.split('/')
-                method_raw = method_basis[0].strip()
-                basis = method_basis[1]
-
-                # 解析形如 vbscf(2,1) 的结构
-                m = re.fullmatch(r"([A-Za-z0-9_+-]+)\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", method_raw)
-                if m:
-                    method = m.group(1).lower()
-                    try:
-                        self.cmd_nae = int(m.group(2))
-                        self.cmd_nao = int(m.group(3))
-                    except Exception:
-                        raise ValueError(f"Failed to parse nae/nao from method specification: {method_raw}")
-                else:
-                    method = method_raw.lower()
-
-                if method not in SUPPORTED_METHODS:
-                    raise ValueError(f"Unsupported method: {method}. Supported methods are: {SUPPORTED_METHODS}")
-                break
-        if not method or not basis:
-            raise ValueError(f"Failed to parse method and basis from input file {self.input_path}. Ensure that the method and basis in the format 'method/basis'.")
-        atvb_input = autoVBInputData(
-            title=input_file.title,
-            filepath=self.input_path,
-            filename=self.input_path.stem,
-            method=method,
-            basis=basis,
-            geometry=input_file.geometry,
-            charge=input_file.charge,
-            spin=input_file.spin,
-            mem=input_file.mem,
-            nproc=input_file.nprocs,
-        )
-        print(f"Parsed input file {self.input_path} successfully with method {method} and basis {basis}")
-
-        return atvb_input
-    
-    def parse_value_by_type(self, raw: str, target_type, key: str):
-        if isinstance(raw, str):
-            raw = raw.strip()
-        origin = get_origin(target_type)
-        # print(f"Parsing value for key '{key}': raw='{raw}', target_type={target_type}, origin={origin}")
-        if get_origin(target_type) == Union:
-            actual_types = get_args(target_type)
-            target_type = actual_types[0]
-
-        if isinstance(raw, bool) and target_type is bool:
-            return raw
-        # 布尔判断（支持 1/0/true/false/yes/no）
-        if target_type is bool:
-            return raw.lower() in ("1", "true", "yes", "y")
-        # 整数
-        if target_type is int:
-            try:
-                return int(raw)
-            except Exception:
-                return int(float(raw))
-        # 浮点
-        if target_type is float:
-            return float(raw)
-        # 列表（尝试解析数字或字符串列表）
-        if origin is list or target_type is list:
-            s = raw
-            # 去除括号/中括号
-            if s.startswith(("(", "[")) and s.endswith((")", "]")):
-                s = s[1:-1]
-            # 用分号或空白分割
-            parts = [p for p in re.split(r'[;,\s]+', s) if p != ""]
-            parsed = []
-            for p in parts:
-                if re.fullmatch(r'[+-]?\d+', p):
-                    parsed.append(int(p))
-                else:
-                    try:
-                        parsed.append(float(p))
-                    except Exception:
-                        parsed.append(p)
-            if key == "aoa_old":
-                if all(isinstance(x, int) for x in parsed):
-                    return [parsed[i : i + 2] for i in range(0, len(parsed), 2)]
-            return parsed
-        if target_type is Path:
-            return Path(raw)
-        # 默认当字符串返回（去掉外层单/双引号）
-        if (raw.startswith("'") and raw.endswith("'")) or (raw.startswith('"') and raw.endswith('"')):
-            return raw[1:-1]
-        return raw
-
-    def parse_autovb_options(self, s: str) -> VBSettings:
-        """
-        解析形如: autovb{nae=4, nao=4}的字符串
-        提取大括号内部的键值对，并把识别到的字段注入到 VBSettings dataclass 中。
-        - 只注入 VBSettings 中已声明的字段，类型会尝试转换（int/float/bool/list/str）。
-        - 未识别或非 VBSettings 字段会被忽略。
-        """
-        m = re.search(r"\{([^}]*)\}", s, re.DOTALL)
-        if not m:
-            return VBSettings()  # 无选项，返回默认
-
-        inner = m.group(1)
-        pattern = r'\s*(?:\([^()]*\)|[^,])+\s*'
-        pair_list: list[str] = [p.strip() for p in re.findall(pattern, inner) if p.strip()]
-        settings = VBSettings()
-        type_hints = get_type_hints(VBSettings)
-
-        for pair in pair_list:
-            if "=" not in pair:
-                key = pair.strip()
-                value = True
-            else:
-                key, value = pair.split("=", 1)
-                key = key.strip()
-                value = value.strip(' ')
-
-            if not hasattr(settings, key):
-                continue
-            target_type = type_hints.get(key, str)
-            try:
-                parsed_value = self.parse_value_by_type(value, target_type, key)
-                setattr(settings, key, parsed_value)
-                # print(f"Set VBSettings.{key} = {parsed_value} (parsed from '{value}')")
-            except Exception as e:
-                print(f"Warning: failed to parse value for key '{key}' with raw value '{value}'. Error: {e}. Skipping this option.")
-                continue
-
-        # 验证 VBSettings 合法性（若不合法会抛错并中止流程）
-        settings.validate()
-
-        return settings
+        print_subroutine("autoVB workflow completed successfully!")
