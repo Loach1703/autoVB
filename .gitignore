@@ -3,7 +3,6 @@ autovb.err-*
 autovb.log-*
 g16.*
 *.gjf
-*.xmi
 *.out
 C4H6_*
 82712_*
@@ -11,6 +10,8 @@ mol-*
 scr-*
 tmp-*
 orb.tmp
+*_vb.xmi
+*_blw.xmi
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

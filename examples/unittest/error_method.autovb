@@ -1,8 +1,8 @@
 %mem=4GB
 %nprocshared=4
-#p vbscf(4,4)/cc-pVDZ
+#p vbpt3/6-31G*
 
-autovb{}
+autovb{nbo_file=C4H6.fch,novb}
 
 0 1
 C   -3.329219900   2.091826940   0.000000000

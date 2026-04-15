@@ -1584,6 +1584,9 @@ class autoVBMain:
         active_orbital_atom = self.input_data.vbsettings.aoa
         aoa_old = self.input_data.vbsettings.aoa_old
         threshold = self.input_data.vbsettings.threshold
+        if self.input_data.method.lower() == 'lam-dfvb':
+            print("LAM-DFVB method detected, currently only BLYP functional is available.")
+            self.input_data.method = 'lam-dfvb=blyp'
 
         # 检查nbo输出文件是否存在，是大写还是小写
         nbo_out_path_upper = Path(f"{self.nbo_gjf_name.upper()}.37")
