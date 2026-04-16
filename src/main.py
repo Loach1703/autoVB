@@ -68,6 +68,10 @@ class VBSettings:
         if self.threshold < 0:
             raise ValueError("VBSettings: 'threshold' must be >= 0")
 
+        # aoa 和 aoa_old 不能同时设置
+        if self.aoa and self.aoa_old:
+            raise ValueError("VBSettings: 'aoa' and 'aoa_old' cannot both be set")
+
         self.validate_stru()
         self.validate_nbo_file()
 
@@ -1232,12 +1236,11 @@ class XMVBNBO:
         orb_tuple = (head_text,orb_text)
         return orb_tuple
 
-    def get_orb_section_active(self, orbital_matrix: np.ndarray, reorder=True) -> Tuple[str, str]:
+    def get_orb_section_active(self, orbital_matrix: np.ndarray) -> Tuple[str, str]:
         '''
         获取 XMVB .xmi 文件中的 $orb 部分文本，活性部分
         Args:
             orbital_matrix (np.ndarray): 轨道矩阵
-            reorder (bool): 是否需要将活性轨道的原子顺序调整为从小到大（这样可能可以生成遵循Rumer规则的结构），默认True
         Returns:
             tuple (Tuple[str, str]): $orb 部分文本，前端为头文本，后端为轨道文本
         '''
@@ -1248,10 +1251,22 @@ class XMVBNBO:
         orb_atom_list = []
         for orb_atom in orb_text_o:
             orb_atom_list += orb_atom
-        if reorder:
+
+        # 根据aoa设置的原子顺序重新排序轨道
+        if self.input_data.vbsettings.aoa:
+            orb_atom_list_reordered = []
+            for atom in self.input_data.vbsettings.aoa:
+                if atom not in orb_atom_list:
+                    raise ValueError(f"Active atom {atom} specified in aoa is not found in the active orbitals. Check active space settings.")
+                orb_atom_list_reordered.append(atom)
+            orb_atom_list = orb_atom_list_reordered[::1]
+
+        # 重新排序
+        if self.input_data.vbsettings.reorder:
             orb_atom_list.sort()
 
-        orb_atom_list[0] = f"{orb_atom_list[0]}   # active orbital start"
+        # 在活性轨道的第一行添加注释，标明活性轨道开始
+        orb_atom_list[0] = f"{orb_atom_list[0]}   # active orbital start here"
 
         orb_text = '\n'.join(str(i) for i in orb_atom_list) + '\n'
         orb_tuple = (head_text,orb_text)
@@ -1397,7 +1412,7 @@ class XMVBNBO:
 
         # 获取orb部分
         inactive_head, inactive_text = self.get_orb_section_inactive(inactive_orbital_matrix)
-        active_head, active_text = self.get_orb_section_active(active_orbital_matrix, reorder=vbsetting.reorder)
+        active_head, active_text = self.get_orb_section_active(active_orbital_matrix)
         active_text = active_text.rstrip('\n')
         orb_number_text = f'{inactive_head} {active_head}'
         orb_section = f'{orb_number_text}\n{inactive_text}{active_text}'
@@ -1625,7 +1640,8 @@ class autoVBMain:
             elif aoa_old:
                 if nao == 0 or nae == 0:
                     gaoi = wxp.get_active_orbital_indices_from_aoa_old(aoa_old)
-                    nao = len(aoa_old)
+                    aoa_old_flat = [atom for pair in aoa_old for atom in pair]
+                    nao = len(aoa_old_flat)
                     nae = len(gaoi) * 2
                 wxp.set_active_space(nae, nao)
             # 手动指定了活性空间，但没有aoa
