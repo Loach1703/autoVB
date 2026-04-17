@@ -39,12 +39,13 @@ class VBSettings:
     nae: int = 0
     nao: int = 0
     aoa: list[int] = field(default_factory=list) # 活性原子列表 active orbital atoms，例如 [1, 2, 3, 4] 表示活性的原子共有4个，索引从1开始计数
-    aoa_old: list[list[int]] = field(default_factory=list) # 旧的活性原子列表，包含每个轨道对应的原子，例如 [[1, 2], [2, 3], [3, 4]] 表示第一个轨道对应原子1和2，第二个轨道对应原子2和3，第三个轨道对应原子3和4
+    aoa_bond: list[list[int]] = field(default_factory=list) # 旧的活性原子列表，包含每个轨道对应的原子，例如 [[1, 2], [2, 3], [3, 4]] 表示第一个轨道对应原子1和2，第二个轨道对应原子2和3，第三个轨道对应原子3和4
     aoi: list[int] = field(default_factory=list) # 活性轨道列表 active orbital indices，例如 [1, 2, 3] 表示活性的nbo轨道共有3个，索引从1开始计数
     inte: str = "libcint"
     iscf: int = 5
     reorder: bool = False
     atom_slice: bool = False
+    bond_first: bool = False
     threshold: float = 0
     stru: str = "full"
     sort: bool = False
@@ -68,9 +69,13 @@ class VBSettings:
         if self.threshold < 0:
             raise ValueError("VBSettings: 'threshold' must be >= 0")
 
-        # aoa 和 aoa_old 不能同时设置
-        if self.aoa and self.aoa_old:
-            raise ValueError("VBSettings: 'aoa' and 'aoa_old' cannot both be set")
+        # aoa 和 aoa_bond 不能同时设置
+        if self.aoa and self.aoa_bond:
+            raise ValueError("VBSettings: 'aoa' and 'aoa_bond' cannot both be set")
+
+        # bond_first 是 aoa 的子选项，如果 bond_first=True 则必须设置 aoa
+        if self.bond_first and not self.aoa:
+            raise ValueError("VBSettings: 'bond_first' is a sub-option of 'aoa', it requires 'aoa' to be set")
 
         self.validate_stru()
         self.validate_nbo_file()
@@ -1155,27 +1160,66 @@ class XMVBNBO:
         actorb_indices = []
         sorted_indices = np.argsort(self.occupation_numbers[:self.occupation_orbital_matrix.shape[0]])
         orb_text_o = get_orbital_atom_contribution(self.sorted_occupation_orbital_matrix, self.mol)
-        # print(orb_text_o)
-        for sorted_orb_idx, pair in enumerate(orb_text_o):
-            # 判断这个轨道对应的原子是否在活性原子列表中，如果都在才选这个轨道
-            need_orb = all(atom in active_atom_copy for atom in pair)
-            # print(pair, need_orb)
-            if not need_orb:
-                continue
-            orb_index = int(sorted_indices[sorted_orb_idx])
-            if orb_index not in actorb_indices:
-                actorb_indices.append(orb_index)
-            for atom in pair:
-                active_atom_copy.remove(atom)
-            # 如果活性原子列表已经空了，说明已经找到足够的活性轨道了，可以停止循环了
-            if not active_atom_copy:
-                break
+        print(f"[DEBUG][aoa] requested active atoms: {active_atom}")
+        print(f"[DEBUG][aoa] orbital atom contribution (occupation-sorted): {orb_text_o}")
+
+        def consume_orbital_candidates(candidates: List[Tuple[int, int, List[int], float]], stage_name: str) -> None:
+            print(f"[DEBUG][aoa][{stage_name}] start scanning {len(candidates)} candidates, remaining atoms={active_atom_copy}")
+            for sorted_orb_idx, orb_index, pair, occ in candidates:
+                need_orb = all(atom in active_atom_copy for atom in pair)
+                print(f"[DEBUG][aoa][{stage_name}] candidate sorted_idx={sorted_orb_idx}, orb_index={orb_index}, occ={occ:.6f}, pair={pair}, need_orb={need_orb}, remaining_before={active_atom_copy}")
+                if not need_orb:
+                    continue
+                if orb_index not in actorb_indices:
+                    actorb_indices.append(orb_index)
+                for atom in pair:
+                    if atom in active_atom_copy:
+                        active_atom_copy.remove(atom)
+                print(f"[DEBUG][aoa][{stage_name}] selected orb_index={orb_index}, selected_list={actorb_indices}, remaining_after={active_atom_copy}")
+                if not active_atom_copy:
+                    print(f"[DEBUG][aoa][{stage_name}] all active atoms are covered, stop scanning.")
+                    break
+
+        if self.input_data.vbsettings.bond_first:
+            print("Selecting active orbitals based on bond-first strategy...")
+            one_atom_orb_indices: List[Tuple[int, int, List[int], float]] = []
+            two_atom_orb_indices: List[Tuple[int, int, List[int], float]] = []
+            for sorted_orb_idx, pair in enumerate(orb_text_o):
+                orb_index = int(sorted_indices[sorted_orb_idx])
+                pair_list = list(pair)
+                occ = float(self.occupation_numbers[orb_index])
+                row = (sorted_orb_idx, orb_index, pair_list, occ)
+                if len(pair_list) == 1:
+                    one_atom_orb_indices.append(row)
+                else:
+                    # len(pair)>=2（包含典型双原子和极少数多中心情况）均优先搜索
+                    two_atom_orb_indices.append(row)
+
+            print(f"[DEBUG][aoa][bond_first] two_atom_orb_indices={[(i, idx, pair) for i, idx, pair, _ in two_atom_orb_indices]}")
+            print(f"[DEBUG][aoa][bond_first] one_atom_orb_indices={[(i, idx, pair) for i, idx, pair, _ in one_atom_orb_indices]}")
+
+            # 先搜索成键轨道（双原子/多原子）
+            consume_orbital_candidates(two_atom_orb_indices, "two_atom_first")
+            # 如果还有未覆盖活性原子，再补单原子轨道
+            if active_atom_copy:
+                print(f"[DEBUG][aoa][bond_first] remaining atoms after two-atom scan: {active_atom_copy}, now scanning one-atom candidates.")
+                consume_orbital_candidates(one_atom_orb_indices, "one_atom_second")
+        else:
+            all_candidates: List[Tuple[int, int, List[int], float]] = []
+            for sorted_orb_idx, pair in enumerate(orb_text_o):
+                orb_index = int(sorted_indices[sorted_orb_idx])
+                pair_list = list(pair)
+                occ = float(self.occupation_numbers[orb_index])
+                all_candidates.append((sorted_orb_idx, orb_index, pair_list, occ))
+            consume_orbital_candidates(all_candidates, "normal")
+
+        print(f"[DEBUG][aoa] final selected orbital indices={actorb_indices}, remaining active atoms={active_atom_copy}")
         # 如果循环结束后活性原子列表还不空，说明没有找到足够的活性轨道
         if active_atom_copy:
             raise ValueError(f"Could not find enough active orbitals for the given active atoms. Remaining active atoms without orbitals: {active_atom_copy}. Consider adjusting the active space or checking the NBO occupation numbers.")
         return actorb_indices
     
-    def get_active_orbital_indices_from_aoa_old(self, active_atom:List[List[int]]) -> List[int]:
+    def get_active_orbital_indices_from_aoa_bond(self, active_atom:List[List[int]]) -> List[int]:
         '''
         这是一个旧版本的函数
         获取活性轨道的索引（注意是从0开始计数），根据输入的活性原子列表判断活性轨道，选择对应原子上贡献较大的轨道。
@@ -1315,36 +1359,44 @@ class XMVBNBO:
         oac = get_orbital_atom_contribution(orbital_matrix, self.mol)
         atoms_num = [j for i in oac for j in i]
 
-        atom_orb_dict = {}
+        # 使用列表而不是字典，允许同一个原子对应多个活性轨道
+        atom_orb_items: List[Tuple[int, np.ndarray]] = []
         for orb, oac_item in zip(orbital_matrix, oac):
             # 根据轨道数量看需要复制多少份，同时计算活性轨道数量
             for j in oac_item:
                 if self.input_data.vbsettings.atom_slice:
                     new_orb = self.get_atom_sliced_orbital(orb, j)
-                    atom_orb_dict[j] = new_orb
+                    atom_orb_items.append((j, new_orb))
                 else:
-                    atom_orb_dict[j] = orb
+                    atom_orb_items.append((j, orb))
         
-        if len(atom_orb_dict) != self.active_orbital:
-            raise ValueError(f"Calculated active orbital count ({len(atom_orb_dict)}) does not match expected active orbital count ({self.active_orbital}). Check active space settings.")
+        if len(atom_orb_items) != self.active_orbital:
+            raise ValueError(f"Calculated active orbital count ({len(atom_orb_items)}) does not match expected active orbital count ({self.active_orbital}). Check active space settings.")
         
         # 根据aoa设置的原子顺序重新排序轨道
         if self.input_data.vbsettings.aoa:
-            atom_orb_dict_reordered = {}
+            atom_orb_items_remaining = atom_orb_items[::1]
+            atom_orb_items_reordered: List[Tuple[int, np.ndarray]] = []
             for atom in self.input_data.vbsettings.aoa:
-                if atom not in atom_orb_dict:
+                # 逐个消耗匹配项，支持重复原子
+                matched_idx = None
+                for idx, item in enumerate(atom_orb_items_remaining):
+                    if item[0] == atom:
+                        matched_idx = idx
+                        break
+                if matched_idx is None:
                     raise ValueError(f"Active atom {atom} specified in aoa is not found in the active orbitals. Check active space settings.")
-                atom_orb_dict_reordered[atom] = atom_orb_dict[atom]
-            atom_orb_dict = atom_orb_dict_reordered
+                atom_orb_items_reordered.append(atom_orb_items_remaining.pop(matched_idx))
+            atom_orb_items = atom_orb_items_reordered
 
         # 重新排序
         if self.input_data.vbsettings.reorder:
-            atom_orb_dict = {k: atom_orb_dict[k] for k in sorted(atom_orb_dict)}
+            atom_orb_items = sorted(atom_orb_items, key=lambda x: x[0])
 
-        head_text = (' ' + str(orbital_matrix.shape[1])) * len(atom_orb_dict)
+        head_text = (' ' + str(orbital_matrix.shape[1])) * len(atom_orb_items)
         orb_text = ''
         # 26/3/19 已经完成支持（7，8）这样的活性空间了
-        for i, (atom, orb) in enumerate(atom_orb_dict.items()):
+        for i, (atom, orb) in enumerate(atom_orb_items):
             orb_text += f'# ACTIVE ORBITAL        {i+1}  NAO =    {len(orb)} Localization in atom {atom}{self.mol.atom_pure_symbol(atom-1)}\n'
             orb_text += make_xmvb_format_text(orb, per_line=4)
             orb_text += '\n'
@@ -1379,20 +1431,12 @@ class XMVBNBO:
 
         return return_list
 
-    def split_inactive_active_orbitals(self) -> Tuple[np.ndarray, np.ndarray]:
+    def split_inactive_active_orbitals(self, active_indices: List[int]) -> Tuple[np.ndarray, np.ndarray]:
         '''
         根据活性轨道数和电子数，将轨道矩阵分为非活性轨道矩阵和活性轨道矩阵
         Returns:
             tuple (Tuple[np.ndarray, np.ndarray]): (非活性轨道矩阵, 活性轨道矩阵)
         '''
-        if self.input_data.vbsettings.aoa:
-            active_indices = self.get_active_orbital_indices_from_active_atoms(self.input_data.vbsettings.aoa)
-        elif self.input_data.vbsettings.aoa_old:
-            active_indices = self.get_active_orbital_indices_from_aoa_old(self.input_data.vbsettings.aoa_old)
-        elif self.input_data.vbsettings.aoi:
-            active_indices = self.input_data.vbsettings.aoi 
-        else:
-            active_indices = self.get_active_orbital_indices()
         # 切片出选中的项
         active_orbital_matrix = self.occupation_orbital_matrix[active_indices]
         # 获取剩下的项
@@ -1597,7 +1641,7 @@ class autoVBMain:
         nae = self.input_data.vbsettings.nae
         nao = self.input_data.vbsettings.nao
         active_orbital_atom = self.input_data.vbsettings.aoa
-        aoa_old = self.input_data.vbsettings.aoa_old
+        aoa_bond = self.input_data.vbsettings.aoa_bond
         threshold = self.input_data.vbsettings.threshold
         if self.input_data.method.lower() == 'lam-dfvb':
             print("LAM-DFVB method detected, currently only BLYP functional is available.")
@@ -1631,30 +1675,76 @@ class autoVBMain:
             # 设置活性空间
             # aoa参数，根据原子来判断活性轨道
             if active_orbital_atom:
+                print(f"AOA active orbital atom list provided: {active_orbital_atom}, selecting active orbitals based on these atoms...")
+                active_indices = wxp.get_active_orbital_indices_from_active_atoms(active_orbital_atom)
                 if nao == 0 or nae == 0:
-                    gaoi = wxp.get_active_orbital_indices_from_active_atoms(active_orbital_atom)
                     nao = len(active_orbital_atom)
-                    nae = len(gaoi) * 2
+                    nae = len(active_indices) * 2
                 wxp.set_active_space(nae, nao)
-            # 保留aoa_old参数的兼容性，但不推荐使用
-            elif aoa_old:
+
+            # 保留aoa_bond参数的兼容性，但不推荐使用
+            elif aoa_bond:
+                print(f"AOA_BOND active orbital bond list provided: {aoa_bond}, selecting active orbitals based on these bonds...")
+                active_indices = wxp.get_active_orbital_indices_from_aoa_bond(aoa_bond)
+                aoa_bond_flat = [atom for pair in aoa_bond for atom in pair]
                 if nao == 0 or nae == 0:
-                    gaoi = wxp.get_active_orbital_indices_from_aoa_old(aoa_old)
-                    aoa_old_flat = [atom for pair in aoa_old for atom in pair]
-                    nao = len(aoa_old_flat)
-                    nae = len(gaoi) * 2
+                    nao = len(aoa_bond_flat)
+                    nae = len(active_indices) * 2
                 wxp.set_active_space(nae, nao)
+
+            # aoi 参数
+            elif self.input_data.vbsettings.aoi:
+                # aoi 输入是从 1 开始计数，这里统一转换成 0 开始
+                aoi_1based = self.input_data.vbsettings.aoi
+                if len(set(aoi_1based)) != len(aoi_1based):
+                    raise ValueError(f"Active Orbital Indices contains duplicated values: {aoi_1based}. Please provide unique orbital indices.")
+
+                occ_norb = wxp.orbital_matrix.shape[0]
+                active_indices = []
+                for idx in aoi_1based:
+                    if idx < 1 or idx > occ_norb:
+                        raise ValueError(f"Active Orbital Indices index {idx} is out of range. Valid range is [1, {occ_norb}] for occupied orbitals.")
+                    active_indices.append(idx - 1)
+
+                # 通过给出的 aoi 轨道索引获取原子贡献
+                selected_orbital_matrix = wxp.occupation_orbital_matrix[active_indices]
+                orb_atoms = get_orbital_atom_contribution(selected_orbital_matrix, wxp.mol)
+                active_atom_set = [atom for pair in orb_atoms for atom in pair]
+
+                # 根据 aoi 推导活性空间：
+                # nae = 轨道数*2；nao = 这些轨道涉及的原子数
+                derived_nae = len(active_indices) * 2
+                derived_nao = len(active_atom_set)
+                print(f"AOI atom contributions: {orb_atoms}, occpuation numbers: {wxp.occupation_numbers[active_indices]}")
+                print(f"Derived active space from AOI: nae={derived_nae}, nao={derived_nao}")
+
+                # 判断并设置 nae/nao
+                if nae == 0:
+                    nae = derived_nae
+                elif nae != derived_nae:
+                    raise ValueError(f"NAE mismatch for AOI selection: user provided nae={nae}, but derived nae={derived_nae} from aoi={aoi_1based}.")
+
+                if nao == 0:
+                    nao = derived_nao
+                elif nao != derived_nao:
+                    raise ValueError(f"NAO mismatch for AOI selection: user provided nao={nao}, but derived nao={derived_nao} from aoi={aoi_1based}.")
+
+                wxp.set_active_space(nae, nao)
+
             # 手动指定了活性空间，但没有aoa
             elif nae > 0 and nao > 0:
                 wxp.set_active_space(nae, nao)
+                active_indices = wxp.get_active_orbital_indices()
             # 手动设置了挑选阈值
             elif threshold > 1:
                 nae, nao = wxp.auto_select_active_space(threshold=threshold, auto_set=True)
+                active_indices = wxp.get_active_orbital_indices()
             # 没有任何设置，自动挑选
             else:
                 nae, nao = wxp.auto_select_active_space_iter(auto_set=True)
+                active_indices = wxp.get_active_orbital_indices()
 
-            inact, act = wxp.split_inactive_active_orbitals()
+            inact, act = wxp.split_inactive_active_orbitals(active_indices)
             xmi_path = Path(f"{self.xmi_name}.xmi")
             wxp.write_xmi(
                 inact, 

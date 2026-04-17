@@ -29,7 +29,7 @@ ulimit -v unlimited
 inputname=$1
 SUBMIT_DIR=$(pwd)
 JOB_ID=${SLURM_JOB_ID:-$$}
-JOB_NAME=${SLURM_JOB_NAME:-automr}
+JOB_NAME=${SLURM_JOB_NAME:-autovb}
 
 RUNDIR=/job_dir/${JOB_NAME}_${JOB_ID}
 mkdir -p "$RUNDIR"

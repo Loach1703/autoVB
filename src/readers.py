@@ -262,7 +262,7 @@ class autoVBInputParser:
                         parsed.append(float(p))
                     except Exception:
                         parsed.append(p)
-            if key == "aoa_old":
+            if key == "aoa_bond":
                 if all(isinstance(x, int) for x in parsed):
                     return [parsed[i : i + 2] for i in range(0, len(parsed), 2)]
             return parsed
