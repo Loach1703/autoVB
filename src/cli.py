@@ -130,7 +130,7 @@ def autovb_main(argv=None):
     main_obj.main()
 
 def autovb_test():
-    input_file = Path('C4H6.autovb')
+    input_file = Path('AUTO.autovb')
     resolved = input_file.resolve()
     parser = autoVBInputParser(input_file)
     mem = "4GB"

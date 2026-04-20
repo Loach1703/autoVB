@@ -142,6 +142,7 @@ class autoVBInputData:
     spin: int = 1
     mem: str = "4GB"
     nproc: int = 1
+    debug: bool = False
     vbsettings: VBSettings = field(default_factory=VBSettings)
     xmi_passthrough: XMIPassthrough = field(default_factory=XMIPassthrough)
 
@@ -1076,10 +1077,10 @@ class XMVBNBO:
         # 如果活性轨道过多，则降低活性空间的选择阈值
         if nao >= 15 or nae >= 15:
             print(f"Warning: Automatically selected active space has  {nae} electrons / {nao} orbitals, trying to reduce the threshold to select fewer active orbitals......")
-            for _ in range(10):
+            for _ in range(100):
                 if nao < 15:
                     break
-                threshold -= 0.1
+                threshold -= 0.01
                 nae, nao = self.auto_select_active_space(threshold=threshold, auto_set=False)
                 print(f"Trying threshold {threshold:.2f}: {nae} electrons / {nao} orbitals")
         # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
@@ -1156,18 +1157,22 @@ class XMVBNBO:
         Returns:
             List[int]: 活性轨道的索引列表(从0开始计数)
         '''
+        debug = self.input_data.debug
         active_atom_copy = active_atom[::1]
         actorb_indices = []
         sorted_indices = np.argsort(self.occupation_numbers[:self.occupation_orbital_matrix.shape[0]])
         orb_text_o = get_orbital_atom_contribution(self.sorted_occupation_orbital_matrix, self.mol)
-        print(f"[DEBUG][aoa] requested active atoms: {active_atom}")
-        print(f"[DEBUG][aoa] orbital atom contribution (occupation-sorted): {orb_text_o}")
+        if debug:
+            print(f"[DEBUG][aoa] requested active atoms: {active_atom}")
+            print(f"[DEBUG][aoa] orbital atom contribution (occupation-sorted): {orb_text_o}")
 
         def consume_orbital_candidates(candidates: List[Tuple[int, int, List[int], float]], stage_name: str) -> None:
-            print(f"[DEBUG][aoa][{stage_name}] start scanning {len(candidates)} candidates, remaining atoms={active_atom_copy}")
+            if debug:
+                print(f"[DEBUG][aoa][{stage_name}] start scanning {len(candidates)} candidates, remaining atoms={active_atom_copy}")
             for sorted_orb_idx, orb_index, pair, occ in candidates:
                 need_orb = all(atom in active_atom_copy for atom in pair)
-                print(f"[DEBUG][aoa][{stage_name}] candidate sorted_idx={sorted_orb_idx}, orb_index={orb_index}, occ={occ:.6f}, pair={pair}, need_orb={need_orb}, remaining_before={active_atom_copy}")
+                if debug:
+                    print(f"[DEBUG][aoa][{stage_name}] candidate sorted_idx={sorted_orb_idx}, orb_index={orb_index}, occ={occ:.6f}, pair={pair}, need_orb={need_orb}, remaining_before={active_atom_copy}")
                 if not need_orb:
                     continue
                 if orb_index not in actorb_indices:
@@ -1175,9 +1180,11 @@ class XMVBNBO:
                 for atom in pair:
                     if atom in active_atom_copy:
                         active_atom_copy.remove(atom)
-                print(f"[DEBUG][aoa][{stage_name}] selected orb_index={orb_index}, selected_list={actorb_indices}, remaining_after={active_atom_copy}")
+                if debug:
+                    print(f"[DEBUG][aoa][{stage_name}] selected orb_index={orb_index}, selected_list={actorb_indices}, remaining_after={active_atom_copy}")
                 if not active_atom_copy:
-                    print(f"[DEBUG][aoa][{stage_name}] all active atoms are covered, stop scanning.")
+                    if debug:
+                        print(f"[DEBUG][aoa][{stage_name}] all active atoms are covered, stop scanning.")
                     break
 
         if self.input_data.vbsettings.bond_first:
@@ -1194,15 +1201,16 @@ class XMVBNBO:
                 else:
                     # len(pair)>=2（包含典型双原子和极少数多中心情况）均优先搜索
                     two_atom_orb_indices.append(row)
-
-            print(f"[DEBUG][aoa][bond_first] two_atom_orb_indices={[(i, idx, pair) for i, idx, pair, _ in two_atom_orb_indices]}")
-            print(f"[DEBUG][aoa][bond_first] one_atom_orb_indices={[(i, idx, pair) for i, idx, pair, _ in one_atom_orb_indices]}")
+            if debug:
+                print(f"[DEBUG][aoa][bond_first] two_atom_orb_indices={[(i, idx, pair) for i, idx, pair, _ in two_atom_orb_indices]}")
+                print(f"[DEBUG][aoa][bond_first] one_atom_orb_indices={[(i, idx, pair) for i, idx, pair, _ in one_atom_orb_indices]}")
 
             # 先搜索成键轨道（双原子/多原子）
             consume_orbital_candidates(two_atom_orb_indices, "two_atom_first")
             # 如果还有未覆盖活性原子，再补单原子轨道
             if active_atom_copy:
-                print(f"[DEBUG][aoa][bond_first] remaining atoms after two-atom scan: {active_atom_copy}, now scanning one-atom candidates.")
+                if debug:
+                    print(f"[DEBUG][aoa][bond_first] remaining atoms after two-atom scan: {active_atom_copy}, now scanning one-atom candidates.")
                 consume_orbital_candidates(one_atom_orb_indices, "one_atom_second")
         else:
             all_candidates: List[Tuple[int, int, List[int], float]] = []
@@ -1213,7 +1221,8 @@ class XMVBNBO:
                 all_candidates.append((sorted_orb_idx, orb_index, pair_list, occ))
             consume_orbital_candidates(all_candidates, "normal")
 
-        print(f"[DEBUG][aoa] final selected orbital indices={actorb_indices}, remaining active atoms={active_atom_copy}")
+        if debug:
+            print(f"[DEBUG][aoa] final selected orbital indices={actorb_indices}, remaining active atoms={active_atom_copy}")
         # 如果循环结束后活性原子列表还不空，说明没有找到足够的活性轨道
         if active_atom_copy:
             raise ValueError(f"Could not find enough active orbitals for the given active atoms. Remaining active atoms without orbitals: {active_atom_copy}. Consider adjusting the active space or checking the NBO occupation numbers.")

@@ -316,3 +316,14 @@ class autoVBInputParser:
         settings.validate()
 
         return settings
+
+class GaussianNBOParser:
+    '''
+    解析 Gaussian 的 NBO 输出文件，提取必要的信息，如 NBO 分析结果等
+    '''
+    def __init__(self, nbo_output_path: Path):
+        self.nbo_output_path = nbo_output_path
+
+    def parse(self):
+        # 这里实现 NBO 输出文件的解析逻辑，提取所需信息
+        pass
