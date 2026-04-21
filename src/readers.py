@@ -12,12 +12,23 @@ class autoVBInputParser:
     '''
     def __init__(self, input_path: Path):
         self.input_path = input_path
-        # command-line-like overrides parsed from method, e.g. vbscf(2,1)
+        self.text = self.input_path.read_text(errors='ignore')
+        # vbscf(2,1)会覆盖VBSettings中的nae/nao值，因此需要单独存储
         self.cmd_nae: int | None = None
         self.cmd_nao: int | None = None
-
         suffix = self.input_path.suffix.lower()
-        if suffix == ".xmi":
+
+        # 检查是否使用 .xmi 格式输入
+        if ('$ctrl' in self.text.lower() and '$geo' in self.text.lower()) or suffix == ".xmi":
+            print('Detected .xmi input file format...')
+            is_xmi = True
+        else:
+            is_xmi = False
+
+        print(f"Content of autoVB input file {self.input_path}:")
+        print_subroutine(self.text)
+
+        if is_xmi:
             self.input_data = self.parse_xmi()
         else:
             self.input_data = self.parse_gaussian()
@@ -36,12 +47,8 @@ class autoVBInputParser:
             self.input_data.vbsettings = settings
 
     def parse_xmi(self) -> autoVBInputData:
-        text = self.input_path.read_text(errors='ignore')
-        lines = text.splitlines()
 
-        print(f"Content of XMVB input file {self.input_path}:")
-        print_subroutine(text)
-
+        lines = self.text.splitlines()
         title = self.input_path.stem
         for ln in lines:
             if ln.strip():
@@ -173,10 +180,6 @@ class autoVBInputParser:
     def parse_gaussian(self) -> autoVBInputData:
         with GaussianInFile(self.input_path) as input_file:
             input_file.read()
-        # 输出文件内容
-        with open(self.input_path, 'r') as f:
-            print(f"Content of Gaussian input file {self.input_path}:")
-            print_subroutine(f.read())
         # method和basis不会自动读取，原因是GaussianInFile不支持VB方法的读取，它会识别成一整个参数
         # 识别包含VB或/的行，提取method和basis
         cmd_line = input_file.commandline
