@@ -26,7 +26,7 @@ from .utils import (
     print_subroutine,
     print_warning,
 )
-from .writers import write_xmi_file
+from .writers import write_xmi_file, write_gjf_nbo_file
 
 from mokit.lib.gaussian import load_mol_from_fch
 from pyscf import gto
@@ -50,6 +50,7 @@ class VBSettings:
     stru: str = "full"
     sort: bool = False
     novb: bool = False
+    guess: str = "nbo"
     nbo_file: Path = None
 
     def validate(self) -> None:
@@ -76,6 +77,10 @@ class VBSettings:
         # bond_first 是 aoa 的子选项，如果 bond_first=True 则必须设置 aoa
         if self.bond_first and not self.aoa:
             raise ValueError("VBSettings: 'bond_first' is a sub-option of 'aoa', it requires 'aoa' to be set")
+
+        # guess参数可选值：nbo, pnbo
+        if self.guess not in ("nbo", "pnbo"):
+            raise ValueError("VBSettings: 'guess' must be 'nbo' or 'pnbo'")
 
         self.validate_stru()
         self.validate_nbo_file()
@@ -911,9 +916,21 @@ class XMVBNBO:
         self.filename = filename
         self.mol = mol
         self.input_data = input_data
+        self.basis_function_number = self.mol.nao_nr()
         self.dxx_indices = []
         self.fxxx_indices = []
         self._df_indices()
+
+        # 检查nbo输出文件是否存在，是大写还是小写
+        nbo_orb_path_upper = Path(f"{self.filename.upper()}.37")
+        nbo_orb_path_lower = Path(f"{self.filename}.37")
+        self.nbo_out_file = Path(f"{self.filename}.out")
+        if nbo_orb_path_upper.exists():
+            self.nbo_orb_file = nbo_orb_path_upper
+        elif nbo_orb_path_lower.exists():
+            self.nbo_orb_file = nbo_orb_path_lower
+        else:
+            raise RuntimeError(f"can not find NBO output file for {self.filename}, may be Gaussian NBO calculation did not finish successfully.")
 
         # 获取化学式
         # 1. 提取所有原子的符号列表 (例如: ['C', 'C', 'H', ...])
@@ -933,10 +950,14 @@ class XMVBNBO:
         num_atoms = self.mol.natm
         # [壳层起始, 壳层结束, 起始基函数索引, 结束基函数索引]
         slices: List[List[int,int,int,int]] = self.mol.aoslice_by_atom()
-        self.basis_function_number = len(atom_labels)
+
+        # 读取NBO轨道信息并处理
         self._read_orbital_from_nbo()
+        # 根据DXX和FXXX基函数的索引重排轨道矩阵的行顺序
         self._change_orbital_order()
+        # 将轨道矩阵分为占据轨道和虚轨道
         self._split_occupied_virtual()
+        # 根据占据数对占据轨道从小到大进行排序
         self._sort_occupied_orbitals_by_occupation()
 
     def _check_active_space(self) -> None:
@@ -969,7 +990,16 @@ class XMVBNBO:
         '''
         内部方法，从NBO输出文件中读取轨道矩阵和占据数，存储在self.orbital_matrix和self.occupation_numbers中
         '''
-        self.orbital_matrix, self.occupation_numbers = self.read_orbital_from_nbo(self.filename)
+        from .readers import GaussianNBOParser
+        self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol)
+
+        if self.input_data.vbsettings.guess == 'pnbo':
+            self.orbital_matrix = self.nbo_parser.pnbo_orbital_matrix
+        else:
+            self.orbital_matrix = self.nbo_parser.nbo_orbital_matrix
+
+        self.occupation_numbers = self.nbo_parser.occupation_numbers
+        self.orbital_atoms = self.nbo_parser.orbital_atoms
 
     def _change_orbital_order(self) -> None:
         '''
@@ -985,9 +1015,12 @@ class XMVBNBO:
         内部方法，将轨道矩阵分为占据轨道和虚轨道，分别存储在self.occupation_orbital_matrix和self.virtual_orbital_matrix中
         '''
         total_elec = self.mol.nelectron
-        total_elec_half = int(total_elec / 2)
-        self.occupation_orbital_matrix = self.orbital_matrix[:total_elec_half]
-        self.virtual_orbital_matrix = self.orbital_matrix[total_elec_half:]
+        orb_number = int(total_elec / 2)
+        self.occupation_orbital_matrix = self.orbital_matrix[:orb_number]
+        self.virtual_orbital_matrix = self.orbital_matrix[orb_number:]
+        self.occ_orb_atom = self.orbital_atoms[:orb_number]
+        self.vir_orb_atom = self.orbital_atoms[orb_number:]
+        # print(self.occ_orb_atom)
         print(f"Total electrons: {total_elec}, Occupied orbitals: {self.occupation_orbital_matrix.shape[0]}, Virtual orbitals: {self.virtual_orbital_matrix.shape[0]}")
 
     def _sort_occupied_orbitals_by_occupation(self) -> None:
@@ -997,20 +1030,6 @@ class XMVBNBO:
         sorted_indices = np.argsort(self.occupation_numbers[:self.occupation_orbital_matrix.shape[0]])
         self.sorted_occupation_orbital_matrix = self.occupation_orbital_matrix[sorted_indices]
         self.sorted_occupation_numbers = self.occupation_numbers[sorted_indices]
-
-    def read_orbital_from_nbo(self, filename: str) -> None:
-        '''
-        返回NBO输出文件中读取的轨道矩阵和占据数
-        Args:
-            filename (str): NBO输出文件名（不带后缀）
-        Returns:
-            tuple (tuple[np.ndarray, np.ndarray]): 轨道数组和占据数组成的tuple，二维轨道数组形状为 (基函数数, 基函数数)，一维占据数组形状为 (基函数数)
-        '''
-        input_file_name = Path(f"{filename}.31")
-        orb_array_all: np.ndarray = read_nbo_orbital(input_file_name, self.basis_function_number)
-        orb_array = orb_array_all[:-1]
-        occupation_numbers = orb_array_all[-1]
-        return orb_array, occupation_numbers
 
     def auto_select_active_space(self, threshold: float=1.8, auto_set=False) -> tuple[int, int]:
         '''
@@ -1062,7 +1081,7 @@ class XMVBNBO:
 
     def auto_select_active_space_iter(self, auto_set=False) -> tuple[int, int]:
         '''
-        通过最小大于1的占据数+0.1的方式选择活性轨道（默认方式），返回活性电子数, 活性轨道数
+        通过最小大于1的占据数+0.1的方式选择活性轨道，返回活性电子数, 活性轨道数
         Args:
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
         Returns:
@@ -1547,37 +1566,6 @@ class XMVBNBO:
         write_xmi_file(xmi_path, xmidata, passthrough)
         print(f"Wrote XMVB .xmi to {xmi_path}")
 
-class GaussianNBO:
-    def __init__(self, filename: str, mol: 'gto.Mole'):
-        '''
-        用于生成GaussianNBO的输入文件
-        Args:
-            filename (str): 文件名（不带后缀）
-            mol (pyscf.gto.Mole): Mole对象，包含分子信息
-        '''
-        # 主要需要的是两个信息：pyscf的分子对象，以及轨道信息
-        self.filename = filename
-        self.mol = mol
-        self.geometry_text = pyscf_to_xyz(self.mol)
-
-    def write_gjf(self, mem: str='4GB', nproc: int=4):
-        filetext = f'''%chk={self.filename}.chk
-%mem={mem}
-%nprocshared={nproc}
-#p rhf/{self.mol.basis} pop=nboread nosymm int(nobasistransform) 6D 10F
-
-{self.filename} generated by autoVB
-
-{self.mol.charge} {self.mol.spin + 1}
-{self.geometry_text}
-
-$NBO plot file={self.filename} $END
-
-
-'''
-        with open(f'{self.filename}.gjf', 'w') as f:
-            f.write(filetext)
-
 class autoVBMain:
     """
     autoVBMain类负责整个流程，包括检查环境、生成Gaussian NBO输入文件、从NBO输出中提取轨道信息、选择活性空间、以及最终生成XMVB输入文件。
@@ -1632,8 +1620,7 @@ class autoVBMain:
             charge=charge,
             spin=spin - 1,  # Gaussian的自旋多重度是2S+1，而pyscf的spin是2S
         )
-        gn = GaussianNBO(self.nbo_gjf_name, mol)
-        gn.write_gjf(self.input_data.mem, self.input_data.nproc)
+        write_gjf_nbo_file(mol, self.nbo_gjf_name, mem=self.input_data.mem, nproc=self.input_data.nproc)
         print(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
     def generate_nbo_to_xmi(self):
@@ -1652,21 +1639,16 @@ class autoVBMain:
         active_orbital_atom = self.input_data.vbsettings.aoa
         aoa_bond = self.input_data.vbsettings.aoa_bond
         threshold = self.input_data.vbsettings.threshold
+
+        # 检查方法设置，如果是LAM-DFVB或BOVB，强制调整相关参数
         if self.input_data.method.lower() == 'lam-dfvb':
             print("LAM-DFVB method detected, currently only BLYP functional is available.")
             self.input_data.method = 'lam-dfvb=blyp'
+        if self.input_data.method.lower() == 'bovb':
+            print("BOVB method detected, only iscf=2 will be used regardless of user input.")
+            self.input_data.vbsettings.iscf = 2
 
-        # 检查nbo输出文件是否存在，是大写还是小写
-        nbo_out_path_upper = Path(f"{self.nbo_gjf_name.upper()}.37")
-        nbo_out_path_lower = Path(f"{self.nbo_gjf_name}.37")
-        if nbo_out_path_upper.exists():
-            self.nbo_gjf_name_true = nbo_out_path_upper
-        elif nbo_out_path_lower.exists():
-            self.nbo_gjf_name_true = nbo_out_path_lower
-        else:
-            raise RuntimeError(f"can not find NBO output file for {self.nbo_gjf_name}, may be Gaussian NBO calculation did not finish successfully.")
-
-        wxp = XMVBNBO(self.nbo_gjf_name_true.stem, mol, self.input_data)
+        wxp = XMVBNBO(self.nbo_gjf_name, mol, self.input_data)
         wxp.set_basis_set(basis)
         self.wxp = wxp
 
@@ -1719,7 +1701,7 @@ class autoVBMain:
                 selected_orbital_matrix = wxp.occupation_orbital_matrix[active_indices]
                 orb_atoms = get_orbital_atom_contribution(selected_orbital_matrix, wxp.mol)
                 active_atom_set = [atom for pair in orb_atoms for atom in pair]
-
+                
                 # 根据 aoi 推导活性空间：
                 # nae = 轨道数*2；nao = 这些轨道涉及的原子数
                 derived_nae = len(active_indices) * 2
@@ -1786,21 +1768,38 @@ class autoVBMain:
         xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {filename}.xmi 1> {filename}.xmo  2> {filename}.err"
         self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {filename}.xmi.", f"XMVB execution failed for {filename}.xmi, check {filename}.xmo for details.")
 
+    def timed_call(self, step_name: str, func, *args, **kwargs):
+        step_start = datetime.datetime.now()
+        print(f"Start: {step_name} @ {step_start.strftime('%Y-%m-%d %H:%M:%S')}")
+        result = func(*args, **kwargs)
+        step_elapsed = (datetime.datetime.now() - step_start).total_seconds()
+        print(f"End:   {step_name} | elapsed = {step_elapsed:.2f} s \n")
+        return result
+
     def main(self):
+        workflow_start = datetime.datetime.now()
+
+        # 进行 NBO 计算，生成 .fch 文件供后续提取轨道信息使用
         if self.input_data.vbsettings.nbo_file:
             self.nbo_gjf_name = self.input_data.vbsettings.nbo_file.stem
             print(f"User specified the NBO file directly, skipping Gaussian NBO calculation. NBO file: {self.input_data.vbsettings.nbo_file}")
         else:
             print_subroutine("Entry Gaussian NBO Calculation")
-            self.generate_gjf_from_geo()
-            self.run_gaussian(self.nbo_gjf_name)
-            self.run_formchk(self.nbo_gjf_name)
+            self.timed_call("generate_gjf_from_geo", self.generate_gjf_from_geo)
+            self.timed_call("run_gaussian", self.run_gaussian, self.nbo_gjf_name)
+            self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
 
-        print_subroutine("Entry XMVB Calculation")
-        self.generate_nbo_to_xmi()
+        # 生成 .xmi 文件
+        print_subroutine("Entry NBO to XMI Conversion")
+        self.timed_call("generate_nbo_to_xmi", self.generate_nbo_to_xmi)
+
+        # VB计算是可选的，如果novb设置为True，则跳过VB计算步骤，仅生成 .xmi 文件
         if self.input_data.vbsettings.novb:
             print("VB calculation is skipped due to novb setting.(only generate xmi file from NBO orbitals)")
         else:
-            self.run_xmvb()
+            print_subroutine("Entry XMVB Calculation")
+            self.timed_call("run_xmvb", self.run_xmvb)
 
-        print_subroutine("autoVB workflow completed successfully!")
+        workflow_elapsed = (datetime.datetime.now() - workflow_start).total_seconds()
+
+        print_subroutine(f"autoVB workflow completed successfully!\nTotal workflow elapsed = {workflow_elapsed:.2f} s")

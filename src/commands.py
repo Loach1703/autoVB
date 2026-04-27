@@ -1,8 +1,9 @@
 from pathlib import Path
-from .main import GaussianNBO, XMVBNBO, VBSettings, autoVBInputData
+from .main import XMVBNBO, VBSettings, autoVBInputData
 from pyscf import gto
 
 def autovb_nbo_impl(xyz: Path, basis: str, charge: int, spin: int) -> int:
+    from .writers import write_gjf_nbo_file
     mol = gto.M(
         atom=str(xyz),
         basis=basis,
@@ -10,8 +11,7 @@ def autovb_nbo_impl(xyz: Path, basis: str, charge: int, spin: int) -> int:
         spin=spin,
     )
     name = xyz.stem
-    gn = GaussianNBO(name, mol)
-    gn.write_gjf()
+    write_gjf_nbo_file(mol, name, mem='4GB', nproc=4)
     print(f"Wrote Gaussian NBO input file to {name}.gjf")
     print(f'You need to manually verify if the charge and spin multiplicity are correct.')
     return 0

@@ -4,8 +4,8 @@ from pathlib import Path
 import sys
 
 from .commands import autovb_nbo_impl, autovb_xmi_impl
-from .main import autoVBMain, XMVBNBO, autoVBInputData, VBSettings
-from .readers import autoVBInputParser
+from .main import autoVBMain, autoVBInputData, VBSettings
+from .readers import autoVBInputParser, GaussianNBOParser
 from .utils import generate_fch_from_chk, pyscf_to_xyz, print_warning, print_subroutine
 from .constants import VERSION
 from mokit.lib.gaussian import load_mol_from_fch
@@ -130,15 +130,9 @@ def autovb_main(argv=None):
     main_obj.main()
 
 def autovb_test():
-    input_file = Path('AUTO.autovb')
-    resolved = input_file.resolve()
-    parser = autoVBInputParser(input_file)
-    mem = "4GB"
-    nproc = "4"
-    print(f"Using memory: {mem}, nproc: {nproc}")
-    print(resolved.parent)
-
-    main_obj = autoVBMain(parser.input_data)
-
-    print_subroutine("Entry XMVB Calculation")
-    main_obj.generate_nbo_to_xmi()
+    input_file = Path('C2B2Me2_nbo.out')
+    nbo_orb_file = Path('C2B2ME2_NBO.37')
+    mol = load_mol_from_fch('C2B2Me2_nbo.fch')
+    gnp = GaussianNBOParser(input_file, nbo_orb_file, mol)
+    for i in gnp.nbo_data:
+        print(i.connection, i.orbital_type, i.occupancy)
