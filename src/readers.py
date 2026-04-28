@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING
 from pyssian import GaussianInFile
 import numpy as np
+from collections import Counter
 
 from .constants import SUPPORTED_METHODS
 from .main import autoVBInputData, VBSettings, XMIPassthrough
@@ -97,6 +98,7 @@ class autoVBInputParser:
         # 默认方法
         method: Optional[str] = None
         basis: Optional[str] = None
+        debug = False
 
         ctrl_lines = sections.get("ctrl", [[]])[0] if sections.get("ctrl") else []
         for raw_line in ctrl_lines:
@@ -113,6 +115,9 @@ class autoVBInputParser:
 
                 if mapped_key == "basis":
                     basis = value
+                    continue
+                if mapped_key == "debug":
+                    debug = self.parse_value_by_type(value, bool, mapped_key)
                     continue
 
                 if hasattr(settings, mapped_key):
@@ -134,6 +139,9 @@ class autoVBInputParser:
                     method = key_lower
                 continue
             mapped_key = alias_map.get(key_lower, key_lower)
+            if mapped_key == "debug":
+                debug = True
+                continue
             if hasattr(settings, mapped_key):
                 target_type = type_hints.get(mapped_key, bool)
                 try:
@@ -178,6 +186,7 @@ class autoVBInputParser:
             method=method,
             basis=basis,
             geometry=geometry,
+            debug=debug,
             vbsettings=settings,
             xmi_passthrough=passthrough,
         )
@@ -310,7 +319,12 @@ class autoVBInputParser:
                 key = key.strip()
                 value = value.strip(' ')
 
-            key = alias_map.get(key.lower(), key)
+            key_lower = key.lower()
+            key = alias_map.get(key_lower, key_lower)
+            if key == "debug":
+                if value is True:
+                    self.input_data.debug = True
+                continue
             if not hasattr(settings, key):
                 continue
             target_type = type_hints.get(key, str)
@@ -449,8 +463,11 @@ class GaussianNBOParser:
             pair.antibond.index: pair for pair in self.bond_antibond_pairs
         }
         if self.debug:
+            print("[DEBUG][nbo_parser] Finished parsing NBO output. Summary of parsed data:")
             print(self.bond_antibond_pairs)
-        print(f"Parsed {len(self.bond_antibond_pairs)} BD/BD* bond-antibond pairs from NBO output.")
+            orbital_type_counter = Counter(orbital.orbital_type for orbital in self.nbo_data)
+            print(f"[DEBUG][nbo_parser] NBO orbital type counts: {dict(orbital_type_counter)}")
+            print(f"[DEBUG][nbo_parser] BD/BD* pair count: {len(self.bond_antibond_pairs)}")
 
     def _parse_hybrid_info(self, text: str) -> NBOHybridInfo:
         """解析 s/p/d/f 杂化文本。"""

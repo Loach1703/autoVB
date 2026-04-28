@@ -31,6 +31,9 @@ from .writers import write_xmi_file, write_gjf_nbo_file
 from mokit.lib.gaussian import load_mol_from_fch
 from pyscf import gto
 
+if TYPE_CHECKING:
+    from .readers import NBOOrbital
+
 @dataclass
 class VBSettings:
     '''
@@ -991,7 +994,7 @@ class XMVBNBO:
         内部方法，从NBO输出文件中读取轨道矩阵和占据数，存储在self.orbital_matrix和self.occupation_numbers中
         '''
         from .readers import GaussianNBOParser
-        self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol)
+        self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug)
 
         if self.input_data.vbsettings.guess == 'pnbo':
             self.orbital_matrix = self.nbo_parser.pnbo_orbital_matrix
@@ -1109,6 +1112,228 @@ class XMVBNBO:
             print(f"Automatically setting active space: {nae} electrons / {nao} orbitals")
             self.set_active_space(nae, nao)
         return nae, nao
+    
+    def auto_select_active_space_default(self, auto_set=False) -> tuple[int, int, List[int]]:
+        '''
+        默认选择活性空间的方式，目标轨道为：
+        1. BD轨道，成键占据数小于1.96的轨道
+        2. BD轨道，成键小于1.99，同时反键大于0.08，（这个类型可以称为BD-BD*）
+        3. LP轨道，占据数小于1.96的轨道
+        Args:
+            auto_set (bool): 是否自动将选择的活性空间设置，默认False
+        Returns:
+            tuple: (tuple[int, int, List[int]]): 活性电子数, 活性轨道数, 活性轨道索引列表
+        '''
+        threshold_bd_bonding = 1.96
+        threshold_bd_bonding_min = 1.9
+        threshold_bd_bonding_star = 1.99
+        threshold_bd_bonding_star_min = 1.9
+        threshold_bd_antibonding = 0.08
+        threshold_bd_antibonding_min = 0.15
+        threshold_lp = 1.96
+        threshold_lp_min = 1.9
+        debug = self.input_data.debug
+
+        # 开始挑轨道，计算nae和nao，从self.nbo_parser中读取 NBO 轨道信息
+        # 每个BD轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个BD轨道对应 nao + 2
+        # 每个LP轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个LP轨道对应 nao + 1
+        # 挑轨道可以单独在类里面做一个函数
+
+        def electron_count(occupation: float) -> int:
+            if occupation > 1.0:
+                return 2
+            if 0.0 < occupation <= 1.0:
+                return 1
+            return 0
+
+        # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection的长度
+        def orbital_nao(orbital: 'NBOOrbital') -> int:
+            # if orbital.orbital_type == "LP":
+            #     return 1
+            # if orbital.orbital_type == "BD":
+            #     return 2
+            return len(orbital.connection)
+
+        def add_orbital(selected_orbitals: Dict[int, Dict], orbital: 'NBOOrbital', reason: str) -> None:
+            # 同一个BD轨道可能同时满足BD低占据数和BD-BD*规则，这里用index去重，只追加筛选原因。
+            selected = selected_orbitals.setdefault(
+                orbital.index,
+                {
+                    "orbital": orbital,
+                    "reasons": [],
+                },
+            )
+            if reason not in selected["reasons"]:
+                selected["reasons"].append(reason)
+
+        def select_orbitals(
+            bd_bonding_threshold: float,
+            bd_bonding_star_threshold: float,
+            bd_antibonding_threshold: float,
+            lp_threshold: float,
+        ) -> tuple[int, int, List[int], List[Dict]]:
+            selected_orbitals: Dict[int, Dict] = {}
+            rule_hits = {
+                "BD": [],
+                "BD-BD*": [],
+                "LP": [],
+            }
+
+            for orbital in self.nbo_parser.nbo_data:
+                if orbital.orbital_type == "BD" and 0.0 < orbital.occupancy < bd_bonding_threshold:
+                    add_orbital(selected_orbitals, orbital, f"BD<{bd_bonding_threshold:.3f}")
+                    rule_hits["BD"].append(orbital.index)
+
+            for pair in self.nbo_parser.bond_antibond_pairs:
+                if (
+                    0.0 < pair.bond.occupancy < bd_bonding_star_threshold
+                    and pair.antibond.occupancy > bd_antibonding_threshold
+                ):
+                    reason = f"BD-BD*: BD<{bd_bonding_star_threshold:.3f}, BD*>{bd_antibonding_threshold:.3f}"
+                    add_orbital(selected_orbitals, pair.bond, reason)
+                    rule_hits["BD-BD*"].append(pair.bond.index)
+
+            for orbital in self.nbo_parser.nbo_data:
+                if orbital.orbital_type == "LP" and 0.0 < orbital.occupancy < lp_threshold:
+                    add_orbital(selected_orbitals, orbital, f"LP<{lp_threshold:.3f}")
+                    rule_hits["LP"].append(orbital.index)
+
+            selected_items = sorted(selected_orbitals.values(), key=lambda item: item["orbital"].index)
+            # NBO输出中的轨道编号从1开始；矩阵切片需要0-based索引，所以这里统一减一。
+            active_indices = [item["orbital"].index - 1 for item in selected_items]
+            nae = sum(electron_count(item["orbital"].occupancy) for item in selected_items)
+            nao = sum(orbital_nao(item["orbital"]) for item in selected_items)
+            if debug:
+                print(
+                    f"[DEBUG][default_as] thresholds: BD<{bd_bonding_threshold:.3f}, "
+                    f"BD-BD*: BD<{bd_bonding_star_threshold:.3f} and BD*>{bd_antibonding_threshold:.3f}, "
+                    f"LP<{lp_threshold:.3f}"
+                )
+                print(f"[DEBUG][default_as] rule hits before dedupe: {rule_hits}")
+            return nae, nao, active_indices, selected_items
+
+        def under_limit(selected_nae: int, selected_nao: int) -> bool:
+            return selected_nae < 15 and selected_nao < 15
+
+        nae, nao, active_indices, selected_items = select_orbitals(
+            threshold_bd_bonding,
+            threshold_bd_bonding_star,
+            threshold_bd_antibonding,
+            threshold_lp,
+        )
+
+        # 打印选出的活性轨道数量，以及对应几号轨道
+        print(
+            f"Automatically selected active space by default thresholds: "
+            f"{nae} electrons / {nao} orbitals."
+        )
+        print(
+            f"Default thresholds: BD<{threshold_bd_bonding:.3f}, "
+            f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+            f"LP<{threshold_lp:.3f}"
+        )
+        if selected_items:
+            for item in selected_items:
+                orbital: 'NBOOrbital' = item["orbital"]
+                atom_name = ",".join(
+                    f"{self.mol.atom_pure_symbol(atom - 1)}{atom}"
+                    for atom in orbital.connection
+                )
+                reason_text = "; ".join(item["reasons"])
+                antibond_occ_text = ""
+                if orbital.orbital_type == "BD":
+                    pair = self.nbo_parser.bond_antibond_pair_by_bond_index.get(orbital.index)
+                    if pair is not None:
+                        antibond_occ_text = f", BD* occ={pair.antibond.occupancy:.5f}"
+                print(
+                    f"Selected NBO orbital {orbital.index}: "
+                    f"{orbital.orbital_type}({orbital.orbital_number}) "
+                    f"occ={orbital.occupancy:.5f}{antibond_occ_text}, atom(s): {atom_name}, reason: {reason_text}"
+                )
+        else:
+            print("No active orbitals selected by default thresholds.")
+
+        # 如果 nae/nao 过多（大于15），则降低活性空间的选择阈值，每次降低0.01，直到 nae/nao 小于15
+        # 降低阈值的逻辑（1，2，3每一步都尝试重新选取活性空间）：
+        # 1. LP轨道，占据数阈值降低0.01（下限为1.9）
+        # 2. BD-BD*轨道，成键阈值降低0.005，反键阈值提高0.005（下限为1.9，上限为0.15）
+        # 3. BD轨道，占据数阈值降低0.01（下限为1.9）
+        # 1-3如此循环，直到达到合理的活性空间大小或者所有阈值都降低到下限仍然过大则停止
+        while not under_limit(nae, nao):
+            changed = False
+
+            if threshold_lp > threshold_lp_min:
+                threshold_lp = max(threshold_lp_min, round(threshold_lp - 0.01, 10))
+                changed = True
+                nae, nao, active_indices, selected_items = select_orbitals(
+                    threshold_bd_bonding,
+                    threshold_bd_bonding_star,
+                    threshold_bd_antibonding,
+                    threshold_lp,
+                )
+                print(
+                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                )
+                if under_limit(nae, nao):
+                    break
+
+            if threshold_bd_bonding_star > threshold_bd_bonding_star_min or threshold_bd_antibonding < threshold_bd_antibonding_min:
+                if threshold_bd_bonding_star > threshold_bd_bonding_star_min:
+                    threshold_bd_bonding_star = max(threshold_bd_bonding_star_min, round(threshold_bd_bonding_star - 0.005, 10))
+                if threshold_bd_antibonding < threshold_bd_antibonding_min:
+                    threshold_bd_antibonding = min(threshold_bd_antibonding_min, round(threshold_bd_antibonding + 0.005, 10))
+                changed = True
+                nae, nao, active_indices, selected_items = select_orbitals(
+                    threshold_bd_bonding,
+                    threshold_bd_bonding_star,
+                    threshold_bd_antibonding,
+                    threshold_lp,
+                )
+                print(
+                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                )
+                if under_limit(nae, nao):
+                    break
+
+            if threshold_bd_bonding > threshold_bd_bonding_min:
+                threshold_bd_bonding = max(threshold_bd_bonding_min, round(threshold_bd_bonding - 0.01, 10))
+                changed = True
+                nae, nao, active_indices, selected_items = select_orbitals(
+                    threshold_bd_bonding,
+                    threshold_bd_bonding_star,
+                    threshold_bd_antibonding,
+                    threshold_lp,
+                )
+                print(
+                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                )
+                if under_limit(nae, nao):
+                    break
+
+            if not changed:
+                break
+            
+        # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
+        if not under_limit(nae, nao):
+            print_warning(f"Automatically selected active space has {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
+
+        print(f"Final default active space: {nae} electrons / {nao} orbitals")
+        print(f"Final default active orbital indices (0-based): {active_indices}")
+        self.set_active_indices(active_indices)
+        if auto_set:
+            if nae == 0 or nao == 0:
+                raise ValueError("No active orbitals selected by default rules. Please manually select the active space or check the NBO occupation numbers.")
+            print(f"Automatically setting active space: {nae} electrons / {nao} orbitals")
+            self.set_active_space(nae, nao)
+        
+        # 返回 nae, nao, 以及活性轨道的indices(self.active_indices)
+        return nae, nao, self.active_indices
 
     def set_active_space(self, active_electron: int, active_orbital: int) -> None:
         '''
@@ -1726,14 +1951,15 @@ class autoVBMain:
             elif nae > 0 and nao > 0:
                 wxp.set_active_space(nae, nao)
                 active_indices = wxp.get_active_orbital_indices()
+
             # 手动设置了挑选阈值
             elif threshold > 1:
                 nae, nao = wxp.auto_select_active_space(threshold=threshold, auto_set=True)
                 active_indices = wxp.get_active_orbital_indices()
+                
             # 没有任何设置，自动挑选
             else:
-                nae, nao = wxp.auto_select_active_space_iter(auto_set=True)
-                active_indices = wxp.get_active_orbital_indices()
+                nae, nao, active_indices = wxp.auto_select_active_space_default(auto_set=True)
 
             inact, act = wxp.split_inactive_active_orbitals(active_indices)
             xmi_path = Path(f"{self.xmi_name}.xmi")
