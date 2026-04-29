@@ -397,7 +397,7 @@ class NBOBondAntibondPair:
     key: tuple[int, tuple[int, ...]]
 
     def __str__(self):
-        return f"Bond: {self.bond.index} {self.bond.occupancy} Antibond: {self.antibond.index} {self.antibond.occupancy}\n"
+        return f"Bond: {self.bond.index} {self.bond.connection} {self.bond.occupancy} Antibond: {self.antibond.index} {self.antibond.connection} {self.antibond.occupancy}\n"
     
     __repr__ = __str__
 

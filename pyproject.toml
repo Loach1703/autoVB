@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "pyscf",
     "mokit",
+    "rdkit",
     "pyssian",
 ]
 

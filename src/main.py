@@ -46,15 +46,18 @@ class VBSettings:
     aoi: list[int] = field(default_factory=list) # 活性轨道列表 active orbital indices，例如 [1, 2, 3] 表示活性的nbo轨道共有3个，索引从1开始计数
     inte: str = "libcint"
     iscf: int = 5
-    reorder: bool = False
     atom_slice: bool = False
     bond_first: bool = False
+    nolp: bool = False
     threshold: float = 0
     stru: str = "full"
     sort: bool = False
     novb: bool = False
     guess: str = "nbo"
+    active_order: str = "default"
     nbo_file: Path = None
+    draw_xmo: bool = False
+    draw_rumer: bool = False
 
     def validate(self) -> None:
         """
@@ -84,6 +87,18 @@ class VBSettings:
         # guess参数可选值：nbo, pnbo
         if self.guess not in ("nbo", "pnbo"):
             raise ValueError("VBSettings: 'guess' must be 'nbo' or 'pnbo'")
+
+        # acitve_order的动态默认值：如果有aoa，则默认按照aoa顺序，否则设为rumer
+        if self.active_order == "default":
+            if self.aoa:
+                self.active_order = "aoa"
+            else:
+                self.active_order = "rumer"
+        # active_order参数可选值：rumer, none, seq, aoa
+        if self.active_order not in ("rumer", "none", "seq", "aoa"):
+            raise ValueError("VBSettings: 'active_order' must be 'rumer', 'none', 'seq', or 'aoa'")
+        if not self.aoa and self.active_order == "aoa":
+            raise ValueError("VBSettings: 'active_order' set to 'aoa' requires 'aoa' to be set")
 
         self.validate_stru()
         self.validate_nbo_file()
@@ -917,6 +932,10 @@ class XMVBNBO:
         '''
         # 主要需要的是两个信息：pyscf的分子对象，以及轨道信息
         self.filename = filename
+        if self.filename.endswith('_nbo'):
+            self.origin_filename = filename[:-4]
+        else:
+            self.origin_filename = filename
         self.mol = mol
         self.input_data = input_data
         self.basis_function_number = self.mol.nao_nr()
@@ -1133,11 +1152,11 @@ class XMVBNBO:
         threshold_lp = 1.96
         threshold_lp_min = 1.9
         debug = self.input_data.debug
+        nolp = self.input_data.vbsettings.nolp
 
         # 开始挑轨道，计算nae和nao，从self.nbo_parser中读取 NBO 轨道信息
         # 每个BD轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个BD轨道对应 nao + 2
         # 每个LP轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个LP轨道对应 nao + 1
-        # 挑轨道可以单独在类里面做一个函数
 
         def electron_count(occupation: float) -> int:
             if occupation > 1.0:
@@ -1166,6 +1185,7 @@ class XMVBNBO:
             if reason not in selected["reasons"]:
                 selected["reasons"].append(reason)
 
+        # 子函数：根据给定的阈值选择轨道，返回选中的轨道数量、活性轨道索引列表，以及选中轨道的详细信息（包含轨道对象和筛选原因）
         def select_orbitals(
             bd_bonding_threshold: float,
             bd_bonding_star_threshold: float,
@@ -1179,11 +1199,13 @@ class XMVBNBO:
                 "LP": [],
             }
 
+            # 挑选满足 BD 轨道占据数小于 bd_bonding_threshold 的轨道
             for orbital in self.nbo_parser.nbo_data:
                 if orbital.orbital_type == "BD" and 0.0 < orbital.occupancy < bd_bonding_threshold:
                     add_orbital(selected_orbitals, orbital, f"BD<{bd_bonding_threshold:.3f}")
                     rule_hits["BD"].append(orbital.index)
-
+            
+            # 挑选满足 BD-BD* 规则的轨道：成键占据数小于 bd_bonding_star_threshold，同时反键占据数大于 bd_antibonding_threshold
             for pair in self.nbo_parser.bond_antibond_pairs:
                 if (
                     0.0 < pair.bond.occupancy < bd_bonding_star_threshold
@@ -1193,13 +1215,19 @@ class XMVBNBO:
                     add_orbital(selected_orbitals, pair.bond, reason)
                     rule_hits["BD-BD*"].append(pair.bond.index)
 
-            for orbital in self.nbo_parser.nbo_data:
-                if orbital.orbital_type == "LP" and 0.0 < orbital.occupancy < lp_threshold:
-                    add_orbital(selected_orbitals, orbital, f"LP<{lp_threshold:.3f}")
-                    rule_hits["LP"].append(orbital.index)
+            # 挑选满足 LP 轨道占据数小于 lp_threshold 的轨道
+            if not nolp:
+                for orbital in self.nbo_parser.nbo_data:
+                    if orbital.orbital_type == "LP" and 0.0 < orbital.occupancy < lp_threshold:
+                        add_orbital(selected_orbitals, orbital, f"LP<{lp_threshold:.3f}")
+                        rule_hits["LP"].append(orbital.index)
+            else:
+                if debug:
+                    print("[DEBUG][default_as] NOLP option is set, skipping LP orbital selection.")
 
             selected_items = sorted(selected_orbitals.values(), key=lambda item: item["orbital"].index)
-            # NBO输出中的轨道编号从1开始；矩阵切片需要0-based索引，所以这里统一减一。
+
+            # NBO输出中的轨道编号从1开始；矩阵切片需要0-based索引，所以这里统一减一
             active_indices = [item["orbital"].index - 1 for item in selected_items]
             nae = sum(electron_count(item["orbital"].occupancy) for item in selected_items)
             nao = sum(orbital_nao(item["orbital"]) for item in selected_items)
@@ -1514,6 +1542,47 @@ class XMVBNBO:
         new_orb[a0:a1] = orbital[a0:a1]
         return new_orb
 
+    def get_orb_init_guess_mapping(self, orbital_matrix: np.ndarray) -> Dict[int, List[int]]:
+        '''
+        获取轨道矩阵中每条轨道对应的原子索引列表，构建轨道到原子的映射关系
+        Args:
+            orbital_matrix (np.ndarray): 二维轨道矩阵
+        Returns:
+            dict (Dict[int, List[int]]): 轨道到原子索引列表的映射关系，键为轨道索引（从0开始），值为对应的原子索引列表（从1开始）
+        '''
+        orb_text_o = get_orbital_atom_contribution(orbital_matrix, self.mol)
+        mapping = {}
+        for i, orb_atom in enumerate(orb_text_o):
+            mapping[i] = orb_atom
+        return mapping
+
+    def get_rumer_order(self, active_atoms: List[int]) -> List[int]:
+        from .rumer_active_graph import (
+            infer_active_atom_order,
+            print_order_process,
+            write_active_graph_topology_svg,
+        )
+        print_subroutine("Entry Rumer Active Graph")
+
+        num_atoms = self.mol.natm
+        xyz_block = f"{num_atoms}\n\n{self.geometry_text}"
+        CHARGE = 0
+        HIDE_HYDROGENS = False
+
+        result = infer_active_atom_order(
+            xyz_block,
+            active_atoms,
+            charge=CHARGE,
+            hide_hydrogens=HIDE_HYDROGENS,
+        )
+        if self.input_data.vbsettings.draw_rumer:
+            svg_file = write_active_graph_topology_svg(result, Path.cwd(), f'{self.origin_filename}_rumer_graph.svg')
+            print(f"Active graph topology SVG: {svg_file.resolve()}")
+        print(f"Rumer Active Graph: Final order: {result.final_order}")
+        if self.input_data.debug:
+            print_order_process(result)
+        return result.final_order
+
     def get_orb_section_inactive(self, orbital_matrix: np.ndarray) -> Tuple[str, str]:
         '''
         获取 XMVB .xmi 文件中的 $orb 部分文本，非活性部分
@@ -1549,8 +1618,9 @@ class XMVBNBO:
         for orb_atom in orb_text_o:
             orb_atom_list += orb_atom
 
+        # 重新排序部分
         # 根据aoa设置的原子顺序重新排序轨道
-        if self.input_data.vbsettings.aoa:
+        if self.input_data.vbsettings.aoa and self.input_data.vbsettings.active_order == 'aoa':
             orb_atom_list_reordered = []
             for atom in self.input_data.vbsettings.aoa:
                 if atom not in orb_atom_list:
@@ -1559,8 +1629,12 @@ class XMVBNBO:
             orb_atom_list = orb_atom_list_reordered[::1]
 
         # 重新排序
-        if self.input_data.vbsettings.reorder:
+        if self.input_data.vbsettings.active_order == 'seq':
             orb_atom_list.sort()
+
+        # 默认按照Rumer图的顺序重新排序
+        elif self.input_data.vbsettings.active_order == 'rumer':
+            orb_atom_list = self.get_rumer_order(orb_atom_list)
 
         # 在活性轨道的第一行添加注释，标明活性轨道开始
         orb_atom_list[0] = f"{orb_atom_list[0]}   # active orbital start here"
@@ -1627,7 +1701,7 @@ class XMVBNBO:
             raise ValueError(f"Calculated active orbital count ({len(atom_orb_items)}) does not match expected active orbital count ({self.active_orbital}). Check active space settings.")
         
         # 根据aoa设置的原子顺序重新排序轨道
-        if self.input_data.vbsettings.aoa:
+        if self.input_data.vbsettings.aoa and self.input_data.vbsettings.active_order == 'aoa':
             atom_orb_items_remaining = atom_orb_items[::1]
             atom_orb_items_reordered: List[Tuple[int, np.ndarray]] = []
             for atom in self.input_data.vbsettings.aoa:
@@ -1643,8 +1717,13 @@ class XMVBNBO:
             atom_orb_items = atom_orb_items_reordered
 
         # 重新排序
-        if self.input_data.vbsettings.reorder:
+        if self.input_data.vbsettings.active_order == 'seq':
             atom_orb_items = sorted(atom_orb_items, key=lambda x: x[0])
+        
+        # 默认按照Rumer图的顺序重新排序
+        elif self.input_data.vbsettings.active_order == 'rumer':
+            atom_order = self.get_rumer_order(atoms_num)
+            atom_orb_items.sort(key=lambda x: atom_order.index(x[0]))
 
         head_text = (' ' + str(orbital_matrix.shape[1])) * len(atom_orb_items)
         orb_text = ''
@@ -1956,7 +2035,7 @@ class autoVBMain:
             elif threshold > 1:
                 nae, nao = wxp.auto_select_active_space(threshold=threshold, auto_set=True)
                 active_indices = wxp.get_active_orbital_indices()
-                
+
             # 没有任何设置，自动挑选
             else:
                 nae, nao, active_indices = wxp.auto_select_active_space_default(auto_set=True)
@@ -1994,6 +2073,53 @@ class autoVBMain:
         xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {filename}.xmi 1> {filename}.xmo  2> {filename}.err"
         self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {filename}.xmi.", f"XMVB execution failed for {filename}.xmi, check {filename}.xmo for details.")
 
+    def draw_xmo(self, xmo_file: Path, weight_table: str = 'cc', max_str: int = 20):
+        from .draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
+        from .draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
+        from .draw_xmo.xmo_output_parser import XmoParser
+
+        WEIGHT = weight_table
+        MAX_STR = max_str
+        output_dir = Path.cwd()
+        hide_hydrogens = True
+
+        parsed_data = XmoParser(xmo_file).parse()
+        converter = XmoToDrawerInputConverter(
+            parsed_data,
+            output_dir,
+            hide_hydrogens=hide_hydrogens,
+            max_structures=MAX_STR,
+            baseline_index=1,
+            weight_table=WEIGHT,
+        )
+        drawer_input = converter.convert()
+
+        drawer = MoleculeBondVariantDrawer(
+            xyz_file=drawer_input.xyz_file,
+            output_dir=output_dir,
+            charge=0,
+            active_bond_atom=drawer_input.active_bond_atom,
+            active_space=drawer_input.active_space,
+            active_space_color="#B00000",
+            active_space_width=3.0,
+            color_active_space=True,
+            show_atom_labels=True,
+            hide_hydrogens=hide_hydrogens,
+            show_lone_pairs=True,
+            write_individual_svgs=False,
+        )
+        result = drawer.draw()
+
+        print(f"Read XMO from: {parsed_data.source_file.resolve()}")
+        print(f"Generated XYZ: {drawer_input.xyz_file.resolve()}")
+        print(f"Active orbital -> atom: {drawer_input.orbital_to_atom}")
+        print(f"Weight table: {drawer_input.weight_table}")
+        print(f"active_bond_atom: {drawer_input.active_bond_atom}")
+        print(f"Drawn structures: {len(drawer_input.active_space)}")
+        print(f"Output directory: {result.output_dir.resolve()}")
+        for out_file in result.written_files:
+            print(f" - {out_file.name}")
+
     def timed_call(self, step_name: str, func, *args, **kwargs):
         step_start = datetime.datetime.now()
         print(f"Start: {step_name} @ {step_start.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -2025,6 +2151,19 @@ class autoVBMain:
         else:
             print_subroutine("Entry XMVB Calculation")
             self.timed_call("run_xmvb", self.run_xmvb)
+
+        # draw_xmo 调用
+        if self.input_data.vbsettings.draw_xmo:
+            print_subroutine("Entry draw_xmo")
+            if self.input_data.method.lower() == 'blw':
+                filename = self.blw_name
+            else:
+                filename = self.xmi_name
+            xmo_path = Path(f"{filename}.xmo")
+            if not xmo_path.exists():
+                print(f"XMVB output file {xmo_path} not found, cannot draw XMO. Make sure XMVB calculation completed successfully.")
+            else:
+                self.timed_call("draw_xmo", self.draw_xmo, xmo_path, 'cc')
 
         workflow_elapsed = (datetime.datetime.now() - workflow_start).total_seconds()
 
