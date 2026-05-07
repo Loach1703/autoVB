@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from .constants import D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3
 if TYPE_CHECKING:
     from pyscf import gto
-    from .main import XMIData
 
 def print_warning(message: str):
     """

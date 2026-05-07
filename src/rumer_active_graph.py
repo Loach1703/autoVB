@@ -1303,6 +1303,83 @@ def print_order_process(result: ActiveAtomOrderResult) -> None:
     )
 
 
+def print_order_process_en(result: ActiveAtomOrderResult) -> None:
+    """Print the active atom order inference process in English.
+
+    Args:
+        result: Active atom order inference result.
+
+    Returns:
+        None.
+    """
+    print(f"Read XYZ: {result.xyz_file.resolve()}")
+    print(f"Atom numbering after hiding hydrogens: {result.hide_hydrogens}")
+    print()
+
+    print("Visible atoms:")
+    for atom_number, symbol in result.atom_symbols.items():
+        active_mark = " <- active" if atom_number in result.active_atoms else ""
+        print(f"  {atom_number}: {symbol}{active_mark}")
+    print()
+
+    print(f"Input active atoms: {result.input_active_atoms}")
+    if result.input_active_atoms != result.active_atoms:
+        print(f"Deduplicated active atoms for topology analysis: {result.active_atoms}")
+    print("RDKit-inferred bonds between visible atoms:")
+    for begin_atom, end_atom, bond_type in result.bonds:
+        print(f"  {begin_atom}-{end_atom}: {bond_type}")
+    print()
+
+    print("Direct edges in the active subgraph:")
+    if result.active_edges:
+        for begin_atom, end_atom in result.active_edges:
+            print(f"  {begin_atom}-{end_atom}")
+    else:
+        print("  No direct edges.")
+    print()
+
+    print("Connected components in the active subgraph:")
+    has_fallback_component = False
+    for index, component in enumerate(result.components, start=1):
+        print(f"  Component {index}: atoms={component.atoms}, type={component.kind}")
+        print(f"    Degrees in the active subgraph: {component.degrees}")
+        print(f"    Orientation candidates: {component.orientations}")
+        if component.kind in {
+            "branch-topology",
+            "path-like-topology",
+        }:
+            has_fallback_component = True
+    if has_fallback_component:
+        print(
+            "  Note: branch/path-like components are present. The script uses "
+            "active-graph topology scoring to optimize orientations; such systems "
+            "may have multiple equivalent or near-equivalent orders, so reviewing "
+            "the structure graph is recommended."
+        )
+    print()
+
+    print("Component joining decisions:")
+    print(
+        "  Initial component orientation chosen from the component containing "
+        f"the smallest active atom: {result.start_order}"
+    )
+    for step in result.join_steps:
+        print(
+            "  Current end "
+            f"{step.current_end} -> choose {step.chosen_order}; "
+            f"molecular graph distance={step.graph_distance}"
+        )
+    print()
+
+    if result.final_topology_order != result.final_order:
+        print(f"Deduplicated topology order: {result.final_topology_order}")
+    print(f"Final inferred order: {result.final_order}")
+    print(
+        "Crossing count of direct active-subgraph edges in the final order: "
+        f"{result.active_edge_crossing_count}"
+    )
+
+
 def write_active_graph_topology_svg(
     result: ActiveAtomOrderResult,
     output_dir: str | Path,

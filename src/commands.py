@@ -21,16 +21,16 @@ def autovb_xmi_impl(name: str, mol: gto.Mole, input_data: autoVBInputData) -> in
     wxp.set_basis_set(input_data.basis)
 
     if input_data.vbsettings.aoa:
-        if input_data.vbsettings.nao == 0 or input_data.vbsettings.nae == 0:
-            gaoi = wxp.get_active_orbital_indices_from_active_atoms(input_data.vbsettings.aoa)
-            nao = len(input_data.vbsettings.aoa)
-            nae = len(gaoi) * 2
+        aoi = wxp.get_active_orbital_indices_from_active_atoms(input_data.vbsettings.aoa)
+        nao = len(input_data.vbsettings.aoa)
+        nae = len(aoi) * 2
         wxp.set_active_space(nae, nao)
     elif input_data.vbsettings.nae > 0 and input_data.vbsettings.nao > 0:
         wxp.set_active_space(input_data.vbsettings.nae, input_data.vbsettings.nao)
+        aoi = wxp.get_active_orbital_indices()
     else:
-        nae, nao = wxp.auto_select_active_space(threshold=input_data.vbsettings.threshold, auto_set=True)
+        nae, nao, aoi = wxp.auto_select_active_space_default(auto_set=True)
         wxp.set_active_space(nae, nao)
-    inact, act = wxp.split_inactive_active_orbitals()
-    wxp.write_xmi(inact, act)
+    wxp.split_inactive_active_orbitals(aoi)
+    wxp.write_xmi()
     return 0

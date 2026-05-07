@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autoVB"
-version = "0.1.1"
+version = "0.1.2"
 description = "A generator of XMVB input file: AutoVB tools"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,9 +21,7 @@ autovb_nbo = "autoVB.cli:autovb_nbo"
 autovb_xmi = "autoVB.cli:autovb_xmi"
 autovb = "autoVB.cli:autovb_main"
 autovb_test = "autoVB.cli:autovb_test"
-
-[tool.setuptools]
-packages = ["autoVB"]
+draw_xmo = "autoVB.cli:draw_xmo"
 
 [tool.setuptools.package-dir]
 autoVB = "src"

@@ -14,6 +14,14 @@ def test_autovb_xmi_help_exits_0():
         cli.autovb_xmi(["--help"])
     assert exc.value.code == 0
 
+def test_draw_xmo_help_exits_0():
+    with pytest.raises(SystemExit) as exc:
+        cli.draw_xmo(["--help"])
+    assert exc.value.code == 0
+
+def test_draw_xmo_structures_per_row_parser():
+    assert cli.parse_draw_xmo_structures_per_row("3") == 3
+
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "examples" / "C4H6"
 

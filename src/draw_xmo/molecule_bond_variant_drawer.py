@@ -110,6 +110,7 @@ class MoleculeBondVariantDrawer:
         lone_pair_color: str | None = None,
         lone_pair_dot_radius: float | None = None,
         write_individual_svgs: bool = False,
+        structures_per_row: int = 2,
     ) -> None:
         """初始化绘图器。
 
@@ -132,6 +133,7 @@ class MoleculeBondVariantDrawer:
             lone_pair_dot_radius: 孤对电子点半径。
             write_individual_svgs: 是否写出每个结构的单张 SVG；
                 如果为 `False`，则只写出 grid 汇总图。
+            structures_per_row: grid 汇总图中每行显示的结构数量。
 
         Returns:
             None.
@@ -169,6 +171,7 @@ class MoleculeBondVariantDrawer:
             else lone_pair_dot_radius
         )
         self.write_individual_svgs = write_individual_svgs
+        self.structures_per_row = structures_per_row
 
     @staticmethod
     def _copy_atom_groups(atom_groups: Sequence[Sequence[int]]) -> list[list[int]]:
@@ -419,7 +422,7 @@ class MoleculeBondVariantDrawer:
         """
         sub_img_width = 520
         sub_img_height = 390
-        mols_per_row = 2
+        mols_per_row = self.structures_per_row
         row_count = (len(mols) + mols_per_row - 1) // mols_per_row
         grid_width = sub_img_width * mols_per_row
         grid_height = sub_img_height * row_count
