@@ -6,6 +6,7 @@ nae=4
 basis=6-31g*
 nbo_file=C4H6.fch
 novb
+debug
 $end
 
 $actorb

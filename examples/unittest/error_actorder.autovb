@@ -2,7 +2,7 @@
 %nprocshared=4
 #p vbscf/6-31G*
 
-autovb{nbo_file=C4H6.fch,novb,active_order=error}
+autovb{nbo_file=C4H6.fch,novb,active_order=error,debug}
 
 0 1
 C   -3.329219900   2.091826940   0.000000000

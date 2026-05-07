@@ -453,8 +453,10 @@ class GaussianNBOParser:
         self.orbital_atoms = [orbital.connection for orbital in self.nbo_data]
         # 获得每种轨道类型对应的dict，键为轨道类型字符串，值为该类型轨道的列表
         self.orbitals_by_type: Dict[str, List[int]] = {}
+        self.orbitals_type_list: List[str] = []
         for orbital in self.nbo_data:
             self.orbitals_by_type.setdefault(orbital.orbital_type, []).append(orbital.index)
+            self.orbitals_type_list.append(orbital.orbital_type)
         self.bond_antibond_pairs = self.build_bond_antibond_pairs()
         self.bond_antibond_pair_by_bond_index = {
             pair.bond.index: pair for pair in self.bond_antibond_pairs
@@ -463,6 +465,7 @@ class GaussianNBOParser:
             pair.antibond.index: pair for pair in self.bond_antibond_pairs
         }
         if self.debug:
+            print(f"[DEBUG][nbo_parser] orbital_atoms: {self.orbital_atoms}")
             print("[DEBUG][nbo_parser] Finished parsing NBO output. Summary of parsed data:")
             print(self.bond_antibond_pairs)
             orbital_type_counter = Counter(orbital.orbital_type for orbital in self.nbo_data)

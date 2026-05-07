@@ -4,6 +4,7 @@ autovb.log-*
 g16.*
 *.gjf
 *.out
+examples/unittest/*.out
 C4H6_*
 82712_*
 mol-*

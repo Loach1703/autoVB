@@ -2,7 +2,7 @@
 %nprocshared=4
 #p vbscf/6-31G*
 
-autovb{nbo_file=C4H6.fch,novb,aoa=(1,4,6,8),bond_first}
+autovb{nbo_file=C4H6.fch,novb,aoa=(1,4,6,8),bond_first,debug}
 
 0 1
 C   -3.329219900   2.091826940   0.000000000

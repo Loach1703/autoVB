@@ -43,6 +43,10 @@ def build_autovb_command(input_name: str) -> list[str]:
     return [sys.executable, "-m", "autoVB.cli", input_name]
 
 
+def output_name_for_input(input_name: str) -> str:
+    return f"{Path(input_name).stem}.out"
+
+
 @pytest.mark.parametrize("input_name", INPUT_FILES)
 def test_main_cli_on_unittest_inputs(input_name: str):
     if not EXAMPLES.exists():
@@ -50,31 +54,32 @@ def test_main_cli_on_unittest_inputs(input_name: str):
     if not INPUT_FILES:
         pytest.skip(f"examples/unittest 目录中没有可测试输入文件: {EXAMPLES}")
 
-    proc = subprocess.run(
-        build_autovb_command(input_name),
-        cwd=str(EXAMPLES),
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
+    out_path = EXAMPLES / output_name_for_input(input_name)
+    with out_path.open("w", encoding="utf-8") as out_file:
+        proc = subprocess.run(
+            build_autovb_command(input_name),
+            cwd=str(EXAMPLES),
+            stdout=out_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=180,
+        )
 
-    if proc.stdout:
-        print("=== SUBPROCESS STDOUT ===")
-        print(proc.stdout)
-    if proc.stderr:
-        print("=== SUBPROCESS STDERR ===")
-        print(proc.stderr)
+    out_text = out_path.read_text(encoding="utf-8", errors="replace")
+    if out_text:
+        print(f"=== SUBPROCESS OUTPUT ({out_path.name}) ===")
+        print(out_text)
 
     expect_error = input_name.startswith("error")
     if expect_error:
         assert proc.returncode != 0, (
             f"{input_name} expected failure, but return code is {proc.returncode}\n"
-            f"stdout:\n{proc.stdout}\n"
-            f"stderr:\n{proc.stderr}"
+            f"output file: {out_path}\n"
+            f"output:\n{out_text}"
         )
     else:
         assert proc.returncode == 0, (
             f"{input_name} expected success, but return code is {proc.returncode}\n"
-            f"stdout:\n{proc.stdout}\n"
-            f"stderr:\n{proc.stderr}"
+            f"output file: {out_path}\n"
+            f"output:\n{out_text}"
         )
