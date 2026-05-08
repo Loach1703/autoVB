@@ -17,6 +17,7 @@ def autovb_nbo_impl(xyz: Path, basis: str, charge: int, spin: int) -> int:
     return 0
 
 def autovb_xmi_impl(name: str, mol: gto.Mole, input_data: autoVBInputData) -> int:
+    from .writers import write_xmi_file
     wxp = XMVBNBO(name, mol)
     wxp.set_basis_set(input_data.basis)
 
@@ -32,5 +33,6 @@ def autovb_xmi_impl(name: str, mol: gto.Mole, input_data: autoVBInputData) -> in
         nae, nao, aoi = wxp.auto_select_active_space_default(auto_set=True)
         wxp.set_active_space(nae, nao)
     wxp.split_inactive_active_orbitals(aoi)
-    wxp.write_xmi()
+    xmidata = wxp.get_xmidata()
+    write_xmi_file(name, xmidata, input_data.xmi_passthrough)
     return 0

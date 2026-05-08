@@ -26,13 +26,13 @@ from .utils import (
     print_subroutine,
     print_warning,
 )
-from .writers import write_gjf_nbo_file
 
 from mokit.lib.gaussian import load_mol_from_fch
 from pyscf import gto
 
 if TYPE_CHECKING:
     from .readers import NBOOrbital
+    from .writers import XMIData
 
 @dataclass
 class VBSettings:
@@ -50,7 +50,7 @@ class VBSettings:
     bond_first: bool = False
     nolp: bool = False
     threshold: float = 0
-    stru: str = "full"
+    stru: str = "default"
     sort: bool = False
     novb: bool = False
     guess: str = "nbo"
@@ -109,7 +109,7 @@ class VBSettings:
             raise ValueError("VBSettings: 'stru' must be a string")
 
         s = self.stru.strip().lower()
-        if s in ("full", "cov"):
+        if s in ("full", "cov", 'default'):
             return
         # ion(...) 格式校验，括号内可以是逗号分隔的整数列表或用短横连接的两个整数范围
         m = re.fullmatch(r"ion\(([^)]*)\)", s)
@@ -172,7 +172,8 @@ class autoVBInputData:
 @dataclass
 class OrbitalData:
     '''
-    定义轨道数据结构，包含轨道矩阵、原子标签、基函数信息等
+    定义轨道数据结构，包含轨道矩阵、原子标签等
+    填充该信息即可作为生成 .xmi 的数据
     '''
     index: int
     orbital_matrix: np.ndarray 
@@ -918,6 +919,7 @@ class XMVBNBO:
     2. 自动选择活性空间，或根据输入文件信息进行选择（如 AOA 参数等）
     3. 获得 AOI (Atomic Orbital Indices)，即需要作为活性空间的轨道
     4. 根据 AOI 拆分轨道，构造分块的轨道（可以分为occ，vir，act，ina），对应占据，虚，活性，非活性轨道
+    5. 将非活性和活性轨道作为 XMVB 输入文件的依据，生成 .xmi 文件
     """
     def __init__(self, filename: str, mol: 'gto.Mole', input_data: autoVBInputData) -> None:
         '''
@@ -1026,8 +1028,10 @@ class XMVBNBO:
         self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug)
 
         if self.input_data.vbsettings.guess == 'pnbo':
+            print("Using PNBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.pnbo_orbital_matrix
-        else:
+        elif self.input_data.vbsettings.guess == 'nbo':
+            print("Using NBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.nbo_orbital_matrix
 
         self.occupation_numbers = self.nbo_parser.occupation_numbers
@@ -1909,88 +1913,73 @@ class XMVBNBO:
 
     ##### 最终生成XMVB输入文件的函数 #####
 
-    def write_xmi(self,
-                  xmi_path: Path = None,
-                  ) -> None:
+    def get_xmidata(self) -> 'XMIData':
         vbsetting = self.input_data.vbsettings
-        if not xmi_path:
-            xmi_path = Path(f'{self.filename}.xmi')
-
-        # 获得active_order
-        active_order = self.get_active_orb_atom_order(self.active_orb_atom)
-        # 获取orb部分
-        orb_section = self.get_orb_section_total(active_order)
-        # 获取初猜部分
-        init_guess_section = self.get_init_guess_total(active_order)
-
+        method = self.input_data.method.lower()
+        iscf = vbsetting.iscf
         stru_type = vbsetting.stru
-        if not stru_type:
-            if self.active_orbital > 8:
-                stru_type = 'cov'
-            else:
-                stru_type = 'full'
+        nae, nao = self.active_electron, self.active_orbital
 
-        from .writers import XMIData, write_xmi_file
-        xmidata = XMIData(
-            molecule_name=self.filename,
-            method=self.input_data.method,
-            stru_type=stru_type,
-            int_type=vbsetting.inte,
-            iscf=vbsetting.iscf,
-            nae=self.active_electron,
-            nao=self.active_orbital,
-            basis_set=self.basis_set,
-            sort=vbsetting.sort,
-            orb_section=orb_section,
-            geo_section=self.geometry_text,
-            init_guess_section=init_guess_section,
-        )
-        passthrough = self.input_data.xmi_passthrough
-        write_xmi_file(xmi_path, xmidata, passthrough)
-        print(f"Wrote XMVB .xmi to {xmi_path}")
-    
-    def write_xmi_blw(self, 
-                  xmi_path: Path = None,
-                  ) -> None:
-        vbsetting = self.input_data.vbsettings
-        nae = 2
-        nao = 1
-        stru_type = 'full'
-        method = 'vbscf'
-        if not xmi_path:
-            xmi_path = Path(f'{self.filename}.xmi')
+        if method == 'blw':
+            # BLW方法，本质是2e1o的VBSCF
+            nae = 2
+            nao = 1
+            stru_type = 'full'
+            method = 'vbscf'
 
-        # 获取orb部分
-        inactive_head, inactive_text = self.get_orb_section_inactive(self.occ_orb_atom)
-        inactive_text = inactive_text.strip("\n")
-        orb_number_text = f'{inactive_head}'
-        orb_section = f'{orb_number_text}\n{inactive_text}'
+            # 获取orb部分
+            inactive_head, inactive_text = self.get_orb_section_inactive(self.occ_orb_atom)
+            inactive_text = inactive_text.strip("\n")
+            orb_number_text = f'{inactive_head}'
+            orb_section = f'{orb_number_text}\n{inactive_text}'
 
-        inact_head, inact_guess = self.get_init_guess_inactive(self.occupation_orbital_matrix)
-        # 拼装初猜文本
-        init_guess_text = (
-            inact_head + '\n' +
-            inact_guess.strip("\n")
-        )
+            inact_head, inact_guess = self.get_init_guess_inactive(self.occupation_orbital_matrix)
+            # 拼装初猜文本
+            init_guess_section = (
+                inact_head + '\n' +
+                inact_guess.strip("\n")
+            )
 
-        from .writers import XMIData, write_xmi_file
+        else:
+            # 检查方法设置，如果是LAM-DFVB或BOVB，强制调整相关参数
+            if method == 'lam-dfvb':
+                print("LAM-DFVB method detected, currently only BLYP functional is available.")
+                method = 'lam-dfvb=blyp'
+            if method == 'bovb':
+                print("BOVB method detected, only iscf=2 will be used regardless of user input.")
+                iscf = 2
+
+            # 获得active_order
+            active_order = self.get_active_orb_atom_order(self.active_orb_atom)
+            # 获取orb部分
+            orb_section = self.get_orb_section_total(active_order)
+            # 获取初猜部分
+            init_guess_section = self.get_init_guess_total(active_order)
+
+            stru_type = vbsetting.stru
+            if stru_type == 'default':
+                if self.active_orbital > 8:
+                    stru_type = 'cov'
+                else:
+                    stru_type = 'full'
+
+        # 生成XMIData对象
+        from .writers import XMIData
         xmidata = XMIData(
             molecule_name=self.filename,
             method=method,
             stru_type=stru_type,
             int_type=vbsetting.inte,
-            iscf=vbsetting.iscf,
+            iscf=iscf,
             nae=nae,
             nao=nao,
             basis_set=self.basis_set,
             sort=vbsetting.sort,
             orb_section=orb_section,
             geo_section=self.geometry_text,
-            init_guess_section=init_guess_text,
+            init_guess_section=init_guess_section,
         )
-        passthrough = self.input_data.xmi_passthrough
-        write_xmi_file(xmi_path, xmidata, passthrough)
-        print(f"Wrote XMVB .xmi to {xmi_path}")
+        return xmidata
 
 class autoVBMain:
     """
@@ -2046,6 +2035,7 @@ class autoVBMain:
             charge=charge,
             spin=spin - 1,  # Gaussian的自旋多重度是2S+1，而pyscf的spin是2S
         )
+        from .writers import write_gjf_nbo_file
         write_gjf_nbo_file(mol, self.nbo_gjf_name, mem=self.input_data.mem, nproc=self.input_data.nproc)
         print(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
@@ -2057,31 +2047,21 @@ class autoVBMain:
         3. 使用XMVBNBO类处理NBO输出，进行轨道重排序和切片（如果需要）。
         4. 将处理后的轨道信息写入.xmi文件，供XMVB使用。
         '''
+        from .writers import write_xmi_file
         fchname = Path(f"{self.nbo_gjf_name}.fch")
         mol = load_mol_from_fch(fchname)
         basis = self.input_data.basis
         method = self.input_data.method.lower()
 
-        # 检查方法设置，如果是LAM-DFVB或BOVB，强制调整相关参数
-        if method == 'lam-dfvb':
-            print("LAM-DFVB method detected, currently only BLYP functional is available.")
-            self.input_data.method = 'lam-dfvb=blyp'
-        if method == 'bovb':
-            print("BOVB method detected, only iscf=2 will be used regardless of user input.")
-            self.input_data.vbsettings.iscf = 2
-
         wxp = XMVBNBO(self.nbo_gjf_name, mol, self.input_data)
         wxp.set_basis_set(basis)
         self.wxp = wxp
 
-        # BLW方法，本质是2e1o的VBSCF
         if method == 'blw':
             print_subroutine("Entry BLW Method")
             print("BLW method detected, no active space will be set.")
             xmi_path = Path(f"{self.blw_name}.xmi")
-            wxp.write_xmi_blw(
-                xmi_path=xmi_path,
-            )
+            xmidata = wxp.get_xmidata()
 
         else:
             print_subroutine(f"Entry {method.upper()} Method - Auto active space selection")
@@ -2089,9 +2069,11 @@ class autoVBMain:
             wxp.split_inactive_active_orbitals(active_indices)
             xmi_path = Path(f"{self.xmi_name}.xmi")
             print_subroutine(f"Entry write .xmi file for {method.upper()} method")
-            wxp.write_xmi(
-                xmi_path=xmi_path,
-            )
+            xmidata = wxp.get_xmidata()
+        
+        passthrough = self.input_data.xmi_passthrough
+        write_xmi_file(xmi_path, xmidata, passthrough)
+        print(f"Generated XMVB input file {xmi_path} successfully.")
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
         print(f"Running command: {command}")
