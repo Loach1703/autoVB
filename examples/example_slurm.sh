@@ -44,7 +44,7 @@ outname="${basename_input%.*}.out"
 cd "$RUNDIR" || exit 1
 
 # run in the run dir so intermediate files live on the node-local FS
-autovb "$basename_input" "$JOB_MEM" "$JOB_CPUS" > "$outname" 2>&1
+autovb "$basename_input" --mem "$JOB_MEM" --nproc "$JOB_CPUS" > "$outname" 2>&1
 rc=$?
 
 # copy back results (avoid overwriting original input unless desired)

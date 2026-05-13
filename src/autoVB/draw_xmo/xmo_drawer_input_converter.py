@@ -250,7 +250,9 @@ class XmoToDrawerInputConverter:
         Raises:
             ValueError: 按 `nae - nao` 判断应为孤对电子的位置不是自配对。
         """
-        orbital_pairs = self._active_orbital_pairs(weight.structure_name)
+        orbital_pairs = weight.orbital_connections or self._active_orbital_pairs(
+            weight.structure_name
+        )
         leading_lone_pair_count = self._leading_lone_pair_count()
         bond_pairs: list[tuple[int, int]] = []
 

@@ -58,6 +58,7 @@ class VBSettings:
     nbo_file: Path = None
     draw_xmo: bool = False
     draw_rumer: bool = False
+    nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
 
     def validate(self) -> None:
         """
@@ -1403,6 +1404,8 @@ class XMVBNBO:
         # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
         if not under_limit(nae, nao):
             print_warning(f"Automatically selected active space has {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
+        if nae == 0 or nao == 0:
+            raise ValueError("No active orbitals selected by default rules. Please manually select the active space or check the NBO occupation numbers.")
 
         print(f"Final default active space: {nae} electrons / {nao} orbitals")
         print(f"Final default active orbital indices (0-based): {active_indices}")
@@ -1780,6 +1783,7 @@ class XMVBNBO:
         '''
         inactive_head, inactive_text = self.get_orb_section_inactive(self.inactive_orb_atom)
         active_head, active_text = self.get_orb_section_active(active_order)
+        active_text = active_text.strip("\n")  # 去掉活性部分文本末尾的换行，避免和非活性部分之间多出空行
         orb_number_text = f'{inactive_head} {active_head}'
         orb_text = f'{orb_number_text}\n{inactive_text}{active_text}'
         return orb_text
@@ -1911,7 +1915,7 @@ class XMVBNBO:
             print_order_process_en(result)
         return result.final_order
 
-    ##### 最终生成XMVB输入文件的函数 #####
+    ##### 最终生成XMVB输入文件所需数据的函数 #####
 
     def get_xmidata(self) -> 'XMIData':
         vbsetting = self.input_data.vbsettings
@@ -2036,7 +2040,7 @@ class autoVBMain:
             spin=spin - 1,  # Gaussian的自旋多重度是2S+1，而pyscf的spin是2S
         )
         from .writers import write_gjf_nbo_file
-        write_gjf_nbo_file(mol, self.nbo_gjf_name, mem=self.input_data.mem, nproc=self.input_data.nproc)
+        write_gjf_nbo_file(mol, self.nbo_gjf_name, method=self.input_data.vbsettings.nbo, mem=self.input_data.mem, nproc=self.input_data.nproc)
         print(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
     def generate_nbo_to_xmi(self):

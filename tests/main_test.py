@@ -40,7 +40,7 @@ def build_autovb_command(input_name: str) -> list[str]:
     autovb_bin = shutil.which("autovb")
     if autovb_bin:
         return [autovb_bin, input_name]
-    return [sys.executable, "-m", "autoVB.cli", input_name]
+    return [sys.executable, "-m", "autoVB.cli.autovb", input_name]
 
 
 def output_name_for_input(input_name: str) -> str:
