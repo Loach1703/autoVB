@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from ..constants import SUPPORTED_METHODS
+from ..utils.constants import SUPPORTED_METHODS
 from .logging_config import warn_user
 
 
@@ -173,6 +173,7 @@ class XmoParser:
         r"(?P<structure>.+?)\s*$"
     )
     _REPEAT_INT_RE = re.compile(r"^(?P<value>[-+]?\d+)\*(?P<count>\d+)$")
+    _INT_RANGE_RE = re.compile(r"^(?P<begin>\d+)-(?P<end>\d+)$")
 
     def __init__(self, xmo_file: str | Path) -> None:
         """初始化解析器。
@@ -378,7 +379,8 @@ class XmoParser:
             lines: `$orb` 片段内部的行。
 
         Returns:
-            每一行为一个整数列表的 `$orb` 数据；例如 `1*6` 会展开为六个 `1`。
+            每一行为一个整数列表的 `$orb` 数据；例如 `1*6` 会展开为六个 `1`，
+            `1-3` 会展开为 `1 2 3`。
 
         Raises:
             ValueError: 遇到无法转换为整数的 token。
@@ -402,6 +404,14 @@ class XmoParser:
                     value = int(repeat_match.group("value"))
                     count = int(repeat_match.group("count"))
                     row.extend([value] * count)
+                    continue
+
+                range_match = self._INT_RANGE_RE.match(token)
+                if range_match:
+                    begin = int(range_match.group("begin"))
+                    end = int(range_match.group("end"))
+                    step = 1 if begin <= end else -1
+                    row.extend(range(begin, end + step, step))
                     continue
 
                 try:
@@ -509,6 +519,7 @@ class XmoParser:
             match = self._WEIGHT_ROW_RE.match(line)
             if match:
                 structure_name = match.group("structure").strip()
+                # print(structure_name)
                 orbital_connections = self._parse_structure_orbital_connections(
                     structure_name
                 )
@@ -568,7 +579,6 @@ class XmoParser:
         for token in structure_name.split():
             if ":" in token:
                 continue
-
             if "-" in token:
                 if pending_single_orbital is not None:
                     raise ValueError(
@@ -602,6 +612,8 @@ class XmoParser:
         orbital_to_atom: dict[int, int],
     ) -> list[tuple[int, int]]:
         """把活性轨道连接映射为原子连接。"""
+        # print(orbital_to_atom)
+        # print(orbital_connections)
         return [
             (orbital_to_atom[begin], orbital_to_atom[end])
             for begin, end in orbital_connections

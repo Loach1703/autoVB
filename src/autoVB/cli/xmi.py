@@ -6,11 +6,11 @@ from mokit.lib.gaussian import load_mol_from_fch
 from pyscf import gto
 
 from ..main import XMVBNBO, VBSettings, autoVBInputData
-from ..utils import generate_fch_from_chk, pyscf_to_xyz
+from ..utils.utils import generate_fch_from_chk, pyscf_to_xyz
 
 
 def autovb_xmi_impl(name: str, mol: gto.Mole, input_data: autoVBInputData) -> int:
-    from ..writers import write_xmi_file
+    from ..io.writers import write_xmi_file
     wxp = XMVBNBO(name, mol)
     wxp.set_basis_set(input_data.basis)
 

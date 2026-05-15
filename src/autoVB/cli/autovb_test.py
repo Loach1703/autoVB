@@ -2,7 +2,7 @@ from pathlib import Path
 
 from mokit.lib.gaussian import load_mol_from_fch
 
-from ..readers import GaussianNBOParser
+from ..io.readers import GaussianNBOParser
 
 
 def autovb_test():

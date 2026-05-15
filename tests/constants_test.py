@@ -1,4 +1,4 @@
-from autoVB.constants import to_gaussian_basis_name
+from autoVB.utils.constants import to_gaussian_basis_name
 
 
 def test_to_gaussian_basis_name_maps_common_aliases():

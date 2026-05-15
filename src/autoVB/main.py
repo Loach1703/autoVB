@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
 from collections import Counter
 
-from .constants import FLOAT_RE, BASIS_FUNCTION_DICT, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3, SUPPORTED_METHODS, STRU_CHOICES
-from .utils import (
+from .utils.constants import FLOAT_RE, BASIS_FUNCTION_DICT, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3, SUPPORTED_METHODS, STRU_CHOICES
+from .utils.utils import (
     read_gvb_pair_information,
     array_to_orb,
     read_gamess_dat, 
@@ -31,8 +31,8 @@ from mokit.lib.gaussian import load_mol_from_fch
 from pyscf import gto
 
 if TYPE_CHECKING:
-    from .readers import NBOOrbital
-    from .writers import XMIData
+    from .io.readers import NBOOrbital
+    from .io.writers import XMIData
 
 @dataclass
 class VBSettings:
@@ -1025,7 +1025,7 @@ class XMVBNBO:
         '''
         内部方法，从NBO输出文件中读取轨道矩阵和占据数，存储在self.orbital_matrix和self.occupation_numbers中
         '''
-        from .readers import GaussianNBOParser
+        from .io.readers import GaussianNBOParser
         self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug)
 
         if self.input_data.vbsettings.guess == 'pnbo':
@@ -1408,7 +1408,8 @@ class XMVBNBO:
             raise ValueError("No active orbitals selected by default rules. Please manually select the active space or check the NBO occupation numbers.")
 
         print(f"Final default active space: {nae} electrons / {nao} orbitals")
-        print(f"Final default active orbital indices (0-based): {active_indices}")
+        active_indices_1based = [idx + 1 for idx in active_indices]
+        print(f"Final default active orbital indices (1-based): {active_indices_1based}")
         self.set_active_indices(active_indices)
         if auto_set:
             if nae == 0 or nao == 0:
@@ -1877,6 +1878,7 @@ class XMVBNBO:
         if active_order == 'seq':
             return sorted(orb_atom_list)
         if active_order == 'rumer':
+            print(f"Active order setting is 'rumer', determining active orbital atom order based on Rumer graph...")
             return self.get_rumer_order(orb_atom_list)
         return orb_atom_list
     
@@ -1888,7 +1890,7 @@ class XMVBNBO:
         Returns:
             List[int]: 按照Rumer图顺序排列的活性原子索引列表（从1开始计数）
         '''
-        from .rumer_active_graph import (
+        from .utils.rumer_active_graph import (
             infer_active_atom_order,
             print_order_process_en,
             write_active_graph_topology_svg,
@@ -1909,7 +1911,7 @@ class XMVBNBO:
         if self.input_data.vbsettings.draw_rumer:
             svg_file = write_active_graph_topology_svg(result, Path.cwd(), f'{self.origin_filename}_rumer_graph.svg')
             print(f"Active graph topology SVG: {svg_file.resolve()}")
-        print(f"Rumer Active Graph: Final order: {result.final_order}")
+        print(f"Rumer Active Graph: Final order(atom indices): {result.final_order}")
         if self.input_data.debug:
             print(f"[DEBUG][rumer_order]Rumer Active Graph: Detailed order inference process:")
             print_order_process_en(result)
@@ -1924,6 +1926,7 @@ class XMVBNBO:
         stru_type = vbsetting.stru
         nae, nao = self.active_electron, self.active_orbital
 
+        print(f"Preparing to generate XMVB input data with method={method}, nae={nae}, nao={nao}...")
         if method == 'blw':
             # BLW方法，本质是2e1o的VBSCF
             nae = 2
@@ -1968,7 +1971,7 @@ class XMVBNBO:
                     stru_type = 'full'
 
         # 生成XMIData对象
-        from .writers import XMIData
+        from .io.writers import XMIData
         xmidata = XMIData(
             molecule_name=self.filename,
             method=method,
@@ -2039,7 +2042,7 @@ class autoVBMain:
             charge=charge,
             spin=spin - 1,  # Gaussian的自旋多重度是2S+1，而pyscf的spin是2S
         )
-        from .writers import write_gjf_nbo_file
+        from .io.writers import write_gjf_nbo_file
         write_gjf_nbo_file(mol, self.nbo_gjf_name, method=self.input_data.vbsettings.nbo, mem=self.input_data.mem, nproc=self.input_data.nproc)
         print(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
@@ -2051,7 +2054,7 @@ class autoVBMain:
         3. 使用XMVBNBO类处理NBO输出，进行轨道重排序和切片（如果需要）。
         4. 将处理后的轨道信息写入.xmi文件，供XMVB使用。
         '''
-        from .writers import write_xmi_file
+        from .io.writers import write_xmi_file
         fchname = Path(f"{self.nbo_gjf_name}.fch")
         mol = load_mol_from_fch(fchname)
         basis = self.input_data.basis
@@ -2072,7 +2075,7 @@ class autoVBMain:
             nae, nao, active_indices = wxp.get_aoi(auto_set=True)
             wxp.split_inactive_active_orbitals(active_indices)
             xmi_path = Path(f"{self.xmi_name}.xmi")
-            print_subroutine(f"Entry write .xmi file for {method.upper()} method")
+            print_subroutine(f"Entry write .xmi file")
             xmidata = wxp.get_xmidata()
         
         passthrough = self.input_data.xmi_passthrough
@@ -2090,7 +2093,7 @@ class autoVBMain:
 
     def run_gaussian(self, input_name: str):
         gaussian_cmd = f"{self.gaussian_exe} < {input_name}.gjf 1>{input_name}.out 2>{input_name}.err"
-        self.run_subprocess_command(gaussian_cmd, f"Gaussian execution completed successfully for {input_name}.gjf.", f"Gaussian execution failed for {input_name}.gjf, check {input_name}.log for details.")
+        self.run_subprocess_command(gaussian_cmd, f"Gaussian execution completed successfully for {input_name}.gjf.", f"Gaussian execution failed for {input_name}.gjf, check {input_name}.err and {input_name}.out for details.")
 
     def run_formchk(self, input_name: str):
         formchk_cmd = f"{self.formchk_exe} {input_name}.chk {input_name}.fch"
@@ -2107,7 +2110,7 @@ class autoVBMain:
     def draw_xmo(self, xmo_file: Path, weight_table: str = 'cc', max_str: int = 20):
         from .draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
         from .draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
-        from .draw_xmo.xmo_output_parser import XmoParser
+        from .io.xmo_output_parser import XmoParser
 
         WEIGHT = weight_table
         MAX_STR = max_str
@@ -2124,6 +2127,7 @@ class autoVBMain:
             weight_table=WEIGHT,
         )
         drawer_input = converter.convert()
+        hide_hydrogens = converter.hide_hydrogens
 
         drawer = MoleculeBondVariantDrawer(
             xyz_file=drawer_input.xyz_file,
@@ -2150,6 +2154,11 @@ class autoVBMain:
         print(f"Output directory: {result.output_dir.resolve()}")
         for out_file in result.written_files:
             print(f" - {out_file.name}")
+
+    def parser_xmo(self, xmo_file: Path):
+        from .io.xmo_output_parser import XmoParser
+        parsed_data = XmoParser(xmo_file).parse()
+        return parsed_data
 
     def timed_call(self, step_name: str, func, *args, **kwargs):
         step_start = datetime.datetime.now()
@@ -2182,6 +2191,8 @@ class autoVBMain:
         else:
             print_subroutine("Entry XMVB Calculation")
             self.timed_call("run_xmvb", self.run_xmvb)
+            xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
+            self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
 
         # draw_xmo 调用
         if self.input_data.vbsettings.draw_xmo:

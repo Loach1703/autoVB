@@ -56,7 +56,7 @@ def draw_xmo_file(
 ):
     from ..draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
     from ..draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
-    from ..draw_xmo.xmo_output_parser import XmoParser
+    from ..io.xmo_output_parser import XmoParser
 
     xmo_path = Path(xmo_file)
     if not xmo_path.exists():
@@ -75,6 +75,7 @@ def draw_xmo_file(
         weight_table=weight_table,
     )
     drawer_input = converter.convert()
+    hide_hydrogens = converter.hide_hydrogens
 
     drawer = MoleculeBondVariantDrawer(
         xyz_file=drawer_input.xyz_file,

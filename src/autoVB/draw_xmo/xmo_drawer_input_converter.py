@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 from .molecule_bond_variant_drawer import ValenceBondStructureInfo
-from .xmo_output_parser import XmoParsedData, XmoStructureWeight
+from ..io.xmo_output_parser import XmoParsedData, XmoStructureWeight
 
 
 @dataclass(slots=True)
@@ -57,7 +57,7 @@ class XmoToDrawerInputConverter:
         """
         self.parsed_data = parsed_data
         self.output_dir = Path(output_dir)
-        self.hide_hydrogens = hide_hydrogens
+        self.hide_hydrogens = hide_hydrogens and not self._active_orbitals_include_hydrogen()
         self.max_structures = max_structures
         self.baseline_index = baseline_index
         self.weight_table = self._normalize_weight_table(weight_table)
@@ -108,6 +108,18 @@ class XmoToDrawerInputConverter:
         )
         xyz_file.write_text(xyz_text, encoding="utf-8")
         return xyz_file
+
+    def _active_orbitals_include_hydrogen(self) -> bool:
+        data = self.parsed_data
+        active_orb_rows = data.orb[-data.nao :] if data.nao > 0 else []
+        for orb_row in active_orb_rows:
+            if not orb_row:
+                continue
+            geo_atom_number = orb_row[0]
+            if 1 <= geo_atom_number <= len(data.geo):
+                if data.geo[geo_atom_number - 1].symbol.upper() == "H":
+                    return True
+        return False
 
     def _active_orbital_to_drawer_atom(self) -> dict[int, int]:
         """根据 `$orb` 最后 `nao` 行计算“活性轨道 -> 绘图原子”的映射。

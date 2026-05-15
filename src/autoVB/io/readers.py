@@ -7,9 +7,9 @@ from pyssian import GaussianInFile
 import numpy as np
 from collections import Counter
 
-from ..constants import SUPPORTED_METHODS
+from ..utils.constants import SUPPORTED_METHODS
 from ..main import autoVBInputData, VBSettings, XMIPassthrough
-from ..utils import print_warning, print_subroutine
+from ..utils.utils import print_warning, print_subroutine
 
 if TYPE_CHECKING:
     from pyscf import gto

@@ -1,6 +1,6 @@
 """Public API for the autoVB package."""
 
-from .constants import VERSION
+from .utils.constants import VERSION
 from .main import (
     GVBGI,
     OrbitalData,

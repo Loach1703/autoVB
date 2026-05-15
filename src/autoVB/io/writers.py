@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from dataclasses import dataclass
 import datetime
 
-from ..constants import to_gaussian_basis_name
+from ..utils.constants import to_gaussian_basis_name
 
 if TYPE_CHECKING:
     from ..main import XMIPassthrough
@@ -112,7 +112,7 @@ $end
         f.write(xmi_text)
 
 def write_gjf_nbo_file(mol: 'gto.Mole',filename: str, method: str='hf', mem: str='4GB', nproc: int=4):
-    from ..utils import pyscf_to_xyz
+    from ..utils.utils import pyscf_to_xyz
     geometry_text = pyscf_to_xyz(mol)
     gaussian_basis = to_gaussian_basis_name(mol.basis)
     filetext = f'''%chk={filename}.chk

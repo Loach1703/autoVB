@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rdkit import Chem
-from rdkit.Chem import rdDetermineBonds
+from rdkit.Chem import rdDepictor, rdDetermineBonds
 from rdkit.Chem.Draw import rdMolDraw2D
 
 
@@ -317,6 +317,7 @@ class MoleculeBondVariantDrawer:
             atom.SetNoImplicit(True)
 
         visible_mol.UpdatePropertyCache(strict=False)
+        rdDepictor.Compute2DCoords(visible_mol)
         return visible_mol
 
     def apply_variant(

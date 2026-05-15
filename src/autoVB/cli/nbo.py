@@ -6,7 +6,7 @@ from pyscf import gto
 
 
 def autovb_nbo_impl(xyz: Path, basis: str, charge: int, spin: int) -> int:
-    from ..writers import write_gjf_nbo_file
+    from ..io.writers import write_gjf_nbo_file
     mol = gto.M(
         atom=str(xyz),
         basis=basis,

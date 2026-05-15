@@ -1,4 +1,4 @@
-from autoVB.draw_xmo import XmoParser
+from autoVB.io.xmo_output_parser import XmoParser
 
 
 def write_xmo(tmp_path, text: str):
@@ -212,6 +212,43 @@ $end
     assert parsed.ctrl_options["iprint"] == "3"
     assert parsed.ctrl_options["molden"] is True
     assert parsed.ctrl_options["output"] == "aim"
+
+
+def test_xmo_parser_expands_orb_integer_ranges(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        """
+$ctrl
+vbscf
+nae=2
+nao=2
+basis=cc-pVDZ
+$end
+
+$orb
+1*3
+1-3
+4
+5
+$end
+
+$geo
+C 0.0 0.0 0.0
+C 1.0 0.0 0.0
+C 2.0 0.0 0.0
+C 3.0 0.0 0.0
+C 4.0 0.0 0.0
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 2-3
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+
+    assert parsed.orb[0] == [1, 2, 3]
+    assert parsed.orbital_to_atom == {2: 4, 3: 5}
 
 
 def test_xmo_parser_warns_when_optional_weight_tables_are_missing(tmp_path, capsys):

@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 import sys
 
-from ..constants import VERSION
+from ..utils.constants import VERSION
 from ..io.logging_config import configure_logging, get_logger
 from ..main import autoVBMain
-from ..readers import autoVBInputParser
+from ..io.readers import autoVBInputParser
 
 logger = get_logger(__name__)
 
