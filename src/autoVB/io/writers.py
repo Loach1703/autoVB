@@ -21,6 +21,8 @@ class XMIData:
     iscf: int
     nae: int
     nao: int
+    ncharge: int
+    nmul: int
     basis_set: str
     sort: bool
     orb_section: str
@@ -56,6 +58,8 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
         f"str={xmidata.stru_type}",
         f"nao={xmidata.nao}",
         f"nae={xmidata.nae}",
+        f"ncharge={xmidata.ncharge}",
+        f"nmul={xmidata.nmul}",
         f"iscf={xmidata.iscf}",
         f"int={xmidata.int_type}",
         f"basis={xmidata.basis_set}",

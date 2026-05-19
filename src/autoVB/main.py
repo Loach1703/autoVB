@@ -1179,7 +1179,7 @@ class XMVBNBO:
 
         num_atoms = self.mol.natm
         xyz_block = f"{num_atoms}\n\n{self.geometry_text}"
-        CHARGE = 0
+        CHARGE = self.input_data.charge
         HIDE_HYDROGENS = False
 
         result = infer_active_atom_order(
@@ -1265,6 +1265,8 @@ class XMVBNBO:
             iscf=iscf,
             nae=nae,
             nao=nao,
+            ncharge=self.input_data.charge,
+            nmul=self.input_data.spin,
             basis_set=self.basis_set,
             sort=vbsetting.sort,
             orb_section=orb_section,
