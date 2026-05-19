@@ -28,11 +28,6 @@ def build_autovb_parser() -> argparse.ArgumentParser:
         default=None,
         help="number of processors for external programs",
     )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="show debug logging",
-    )
     return parser
 
 
@@ -48,31 +43,37 @@ def normalize_memory(mem: str) -> str:
 
 def autovb_main(argv=None):
     arg_parser = build_autovb_parser()
+    # 配置输出日志
+    configure_logging()
+    logger.info("Welcome to autoVB! Version %s", VERSION)
     argv = list(argv) if argv is not None else sys.argv[1:]
     if not argv:
-        configure_logging()
-        logger.info("Welcome to autoVB! Version %s", VERSION)
-        logger.error("Usage: autovb <input-file> [--mem MEM] [--nproc NPROC] [--debug]")
+        logger.error("Usage: autovb <input-file> [--mem MEM] [--nproc NPROC]")
         return 2
 
     args = arg_parser.parse_args(argv)
-    configure_logging(level=logging.DEBUG if args.debug else logging.INFO)
-    logger.info("Welcome to autoVB! Version %s", VERSION)
-
     input_file: Path = args.input_file
     resolved = input_file.resolve()
     if not resolved.exists():
-        logger.error("Error: input file not found: %s", input_file)
+        logger.error("input file not found: %s", input_file)
         return 2
+    # 输入文件解析
     input_parser = autoVBInputParser(input_file)
+    debug = input_parser.input_data.debug
+    configure_logging(level=logging.DEBUG if debug else logging.INFO)
 
     # 命令行参数优先级最高，其次是输入文件参数，最后是默认值
     mem = args.mem or input_parser.input_data.mem or "4GB"
     nproc = args.nproc or input_parser.input_data.nproc or "1"
     mem = normalize_memory(mem)
-    logger.debug("Using memory: %s, nproc: %s", mem, nproc)
+    logger.info("Using memory: %s, nproc: %s", mem, nproc)
     input_parser.input_data.mem = mem
     input_parser.input_data.nproc = nproc
 
     main_obj = autoVBMain(input_parser.input_data)
-    main_obj.main()
+    try:
+        main_obj.main()
+    except Exception as e:
+        logger.error("An error occurred: %s", e)
+        raise
+    return 0

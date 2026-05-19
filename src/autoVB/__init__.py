@@ -2,7 +2,6 @@
 
 from .utils.constants import VERSION
 from .main import (
-    GVBGI,
     OrbitalData,
     VBSettings,
     XMIPassthrough,
@@ -13,7 +12,6 @@ from .main import (
 
 __all__ = [
     "VERSION",
-    "GVBGI",
     "OrbitalData",
     "VBSettings",
     "XMIPassthrough",

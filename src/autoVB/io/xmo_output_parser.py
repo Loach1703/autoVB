@@ -7,8 +7,9 @@ import re
 from typing import Any
 
 from ..utils.constants import SUPPORTED_METHODS
-from .logging_config import warn_user
+from .logging_config import get_logger
 
+logger = get_logger(__name__)
 
 @dataclass(slots=True)
 class XmoGeometryAtom:
@@ -510,7 +511,7 @@ class XmoParser:
         """
         title_index = self._find_title_line(lines, title)
         if title_index is None:
-            warn_user(f"Cannot find weight table {title!r} in {self.xmo_file}.")
+            logger.warning(f"Cannot find weight table {title!r} in {self.xmo_file}.")
             return []
 
         weights: list[XmoStructureWeight] = []
@@ -547,7 +548,7 @@ class XmoParser:
                 break
 
         if not weights:
-            warn_user(
+            logger.warning(
                 f"Cannot parse any rows under weight table {title!r} "
                 f"in {self.xmo_file}."
             )

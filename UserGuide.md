@@ -3,7 +3,7 @@
 ---
 ## 1. 简介
 `autoVB` 是一个能从分子结构自动进行 XMVB 计算的自动化工具。它能自动调用 Gaussian 跑 NBO 计算、选择活性空间、提供初猜，并自动生成 XMVB 输入文件进行最终的计算。
-如果你对价键理论还不了解，可以查看[ XMVB 中文教程](https://xmvb.xmu.edu.cn/xmvb-course-cn/)。
+如果你对价键理论还不了解，可以查看[ XMVB 中文教程 ](https://xmvb.xmu.edu.cn/xmvb-course-cn/)。
 
 ### 1.1 环境变量配置
 在运行 `autoVB` 之前，请确保下列可执行文件能被找到：Gaussian 可执行文件、`formchk` 与 `xmvb`。常见的配置方法如下：
@@ -192,7 +192,7 @@ autovb <input-file>
 ```
 如果需要同时指定内存和并行核心数（覆盖文件内 `%mem` 与 `%nprocshared`），可以追加参数：
 ```bash
-autovb <input-file> 8GB 8
+autovb <input-file> --mem 8GB --nproc 8
 ```
 注意：不要在登录节点运行计算，请将命令写入作业脚本（SLURM/PBS 等）提交。`examples` 目录下包含 `example_slurm.sh`，你可以根据本地软件路径调整并提交：
 ```bash

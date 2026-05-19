@@ -7,8 +7,14 @@ import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from .constants import D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3
+from ..io.logging_config import get_logger
+
 if TYPE_CHECKING:
     from pyscf import gto
+
+
+logger = get_logger(__name__)
+
 
 def print_warning(message: str):
     """
@@ -16,9 +22,9 @@ def print_warning(message: str):
     Args:
         message (str): 警告信息内容
     """
-    print("!" * 40)
-    print(f"Warning: {message}")
-    print("!" * 40)
+    logger.info("!" * 40)
+    logger.warning(message)
+    logger.info("!" * 40)
 
 def print_subroutine(message: str):
     """
@@ -26,9 +32,9 @@ def print_subroutine(message: str):
     Args:
         message (str): 子程序信息内容
     """
-    print("=" * 40)
-    print(f"{message}")
-    print("=" * 40)
+    logger.info("=" * 40)
+    logger.info(f"{message}")
+    logger.info("=" * 40)
 
 def build_shift_map(offset: int, base: dict[int, int]) -> dict[int, int]:
     """
@@ -290,10 +296,10 @@ def read_gvb_pair_information(file_path: Path):
         return np.array(data_list)
 
     except FileNotFoundError:
-        print(f"错误: 找不到文件 {file_path}")
+        logger.error(f"错误: 找不到文件 {file_path}")
         return None
     except Exception as e:
-        print(f"发生错误: {e}")
+        logger.error(f"发生错误: {e}")
         return None
 
 def split_dat_line(line: str) -> list[float]:
@@ -449,7 +455,7 @@ def read_nbo_orbital(nbo_path: Path, basis_functions: int) -> np.ndarray:
     # 简单的完整性检查
     expected = basis_functions * (basis_functions + 1)
     if arr.size != expected:
-        print(f"Warning: Read {arr.size} coefficients in NBO file, expected {basis_functions+1}*{basis_functions}={expected}.")
+        logger.warning(f"Read {arr.size} coefficients in NBO file, expected {basis_functions+1}*{basis_functions}={expected}.")
         # 如果读取过多，进行截断；如果过少，reshape会抛出异常
         if arr.size > expected:
              arr = arr[:expected]
@@ -477,16 +483,16 @@ def array_to_orb(dat_orbital_matrix: np.ndarray, reorder_d: bool=True, reorder_f
     all_pair_text = ''.join(all_pair)
     if reorder_d:
         if not dxx_indices:
-            print("No DXX basis functions found; skipping D orbital reordering.")
+            logger.info("No DXX basis functions found; skipping D orbital reordering.")
         else:
             all_pair_text = replace_xmvb_orbital_numbers(all_pair_text, dxx_indices, 3, 'd')
-            print("D orbitals reordered.")
+            logger.info("D orbitals reordered.")
     if reorder_f:
         if not fxxx_indices:
-            print("No FXXX basis functions found; skipping F orbital reordering.")
+            logger.info("No FXXX basis functions found; skipping F orbital reordering.")
         else:
             all_pair_text = replace_xmvb_orbital_numbers(all_pair_text, fxxx_indices, 3, 'f')
-            print("F orbitals reordered.")
+            logger.info("F orbitals reordered.")
     return all_pair_text
 
 def main_read_gamess_dat(path: Path, all_orbital_number: int=None, d_index: list=[]) -> np.ndarray:
@@ -504,7 +510,7 @@ def main_read_gamess_dat(path: Path, all_orbital_number: int=None, d_index: list
     # 对活性轨道最大编号进行截断
     if all_orbital_number:
         orbital_matrix = orbital_matrix[:all_orbital_number, :]
-        print(f"Truncated dat_orbital_matrix to first {all_orbital_number} orbitals.")
+        logger.info(f"Truncated dat_orbital_matrix to first {all_orbital_number} orbitals.")
     if d_index:
         orbital_matrix = replace_col_orbital_numbers(orbital_matrix, d_index, 3, 'd')
     return orbital_matrix
@@ -534,7 +540,7 @@ def print_localized_orbitals_info(number: int, orbital: np.ndarray, atom_labels:
         orbital_atom = orbital_atom[:need_atom_number]
     if need_print:
         print(f"轨道 {number}:")
-        print("系数平方和：", square_sum_coeff)
+        print(f"系数平方和： {square_sum_coeff}")
         print("="*80)
         for o in orbital_atom:
             print(f"原子 {o[0]} ({o[1]}) 贡献: {round(o[2]*100,1)}%")
@@ -575,7 +581,7 @@ def print_localized_orbitals_info_pyscf(number: int, orbital: np.ndarray, mol: '
         orbital_atom = orbital_atom[:need_atom_number]
     if need_print:
         print(f"轨道 {number}:")
-        print("系数平方和：", square_sum_coeff)
+        print(f"系数平方和： {square_sum_coeff}")
         print("="*80)
         for o in orbital_atom:
             print(f"原子 {o[0]} ({o[1]}) 贡献: {round(o[2]*100,1)}%")
@@ -628,7 +634,7 @@ def print_basis_function_info_pyscf(number: int, atom_num: int, orbital: np.ndar
     orbital_atom.sort(key=lambda x: x[2], reverse=True)
     if need_print:
         print(f"轨道 {number} 原子{atom_num}({mol.atom_pure_symbol(atom_num-1)}):")
-        print("系数平方和：", square_sum_coeff)
+        print(f"系数平方和： {square_sum_coeff}")
         print("="*80)
         for o in orbital_atom:
             print(f"{o[1]}基函数 贡献: {round(o[2]*100,1)}%")
@@ -674,7 +680,7 @@ def generate_fch_from_chk(chkname: str, fchname: str, formchk_path: str = 'formc
     '''
     使用 Gaussian 的 formchk 工具将 .chk 文件转换为 .fch 文件。
     '''
-    print(f"Running formchk to generate {fchname}...")
+    logger.info(f"Running formchk to generate {fchname}...")
 
     result = subprocess.run(
         f"{formchk_path} {chkname} {fchname}", 
@@ -683,12 +689,13 @@ def generate_fch_from_chk(chkname: str, fchname: str, formchk_path: str = 'formc
         text=True
     )
     
-    # 获取并打印标准输出 (stdout)
-    print(result.stdout)
+    # 获取并记录标准输出 (stdout)
+    if result.stdout:
+        logger.info(result.stdout)
     
-    # 获取并打印错误输出 (stderr)
+    # 获取并记录错误输出 (stderr)
     if result.stderr:
-        print(result.stderr)
+        logger.error(result.stderr)
 
 def pyscf_to_xyz(mol: 'gto.Mole') -> str:
     """

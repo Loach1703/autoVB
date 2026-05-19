@@ -9,10 +9,14 @@ from collections import Counter
 
 from ..utils.constants import SUPPORTED_METHODS
 from ..main import autoVBInputData, VBSettings, XMIPassthrough
-from ..utils.utils import print_warning, print_subroutine
+from .logging_config import get_logger
 
 if TYPE_CHECKING:
     from pyscf import gto
+
+
+logger = get_logger(__name__)
+
 
 class autoVBInputParser:
     '''
@@ -28,13 +32,15 @@ class autoVBInputParser:
 
         # 检查是否使用 .xmi 格式输入
         if ('$ctrl' in self.text.lower() and '$geo' in self.text.lower()) or suffix == ".xmi":
-            print('Detected .xmi input file format...')
+            logger.info("Detected .xmi input file format...")
             is_xmi = True
         else:
             is_xmi = False
 
-        print(f"Content of autoVB input file {self.input_path}:")
-        print_subroutine(self.text)
+        logger.info(f"Content of autoVB input file {self.input_path}:")
+        logger.info("=" * 40)
+        logger.info(self.text)
+        logger.info("=" * 40)
 
         if is_xmi:
             self.input_data = self.parse_xmi()
@@ -46,7 +52,7 @@ class autoVBInputParser:
             if self.cmd_nae is not None or self.cmd_nao is not None:
                 # warn if settings already specified nao/nae
                 if getattr(settings, 'nae', 0) and getattr(settings, 'nao', 0):
-                    print_warning(f"VBSettings in input file contains 'nae' and 'nao' but method provided overrides; using method values {self.cmd_nae},{self.cmd_nao} and ignoring commandline values.")
+                    logger.warning(f"VBSettings in input file contains 'nae' and 'nao' but method provided overrides; using method values {self.cmd_nae},{self.cmd_nao} and ignoring commandline values.")
                 if self.cmd_nae is not None:
                     settings.nae = int(self.cmd_nae)
                 if self.cmd_nao is not None:
@@ -126,7 +132,7 @@ class autoVBInputParser:
                         parsed_value = self.parse_value_by_type(value, target_type, mapped_key)
                         setattr(settings, mapped_key, parsed_value)
                     except Exception as e:
-                        print(f"Warning: failed to parse $ctrl key '{key}' with value '{value}': {e}")
+                        logger.warning(f"failed to parse $ctrl key '{key}' with value '{value}': {e}")
                     continue
 
                 passthrough.ctrl_extra_lines.append(raw_line)
@@ -148,7 +154,7 @@ class autoVBInputParser:
                     parsed_value = self.parse_value_by_type(True, target_type, mapped_key)
                     setattr(settings, mapped_key, parsed_value)
                 except Exception as e:
-                    print(f"Warning: failed to parse flag field '{s}' in $ctrl: {e}")
+                    logger.warning(f"failed to parse flag field '{s}' in $ctrl: {e}")
             else:
                 passthrough.ctrl_extra_lines.append(raw_line)
 
@@ -190,7 +196,7 @@ class autoVBInputParser:
             vbsettings=settings,
             xmi_passthrough=passthrough,
         )
-        print(f"Parsed XMI input file {self.input_path} successfully with method {method} and basis {basis}")
+        logger.info(f"Parsed XMI input file {self.input_path} successfully with method {method} and basis {basis}")
         return atvb_input
 
     def parse_gaussian(self) -> autoVBInputData:
@@ -237,7 +243,7 @@ class autoVBInputParser:
             mem=input_file.mem,
             nproc=input_file.nprocs,
         )
-        print(f"Parsed input file {self.input_path} successfully with method {method} and basis {basis}")
+        logger.info(f"Parsed input file {self.input_path} successfully with method {method} and basis {basis}")
 
         return atvb_input
     
@@ -333,7 +339,7 @@ class autoVBInputParser:
                 setattr(settings, key, parsed_value)
                 # print(f"Set VBSettings.{key} = {parsed_value} (parsed from '{value}')")
             except Exception as e:
-                print(f"Warning: failed to parse value for key '{key}' with raw value '{value}'. Error: {e}. Skipping this option.")
+                logger.warning(f"failed to parse value for key '{key}' with raw value '{value}'. Error: {e}. Skipping this option.")
                 continue
 
         # 验证 VBSettings 合法性（若不合法会抛错并中止流程）
@@ -386,6 +392,11 @@ class NBOOrbital:
     orbital_vector: np.ndarray = field(default_factory=lambda: np.array([]))
     contributions: List[NBOContribution] = field(default_factory=list)
 
+    def __str__(self):
+        return f"Orbital {self.index}: {self.orbital_type}({self.orbital_number}) Atom(s): {self.atoms} Occupancy: {self.occupancy}\n"
+    
+    __repr__ = __str__
+
 
 @dataclass
 class NBOBondAntibondPair:
@@ -411,7 +422,7 @@ class GaussianNBOParser:
     # 每个轨道块首行，例如：24. (1.99983) CR ( 1) O   1 ...
     _BLOCK_START_RE = re.compile(
         r"^\s*(?P<idx>\d+)\.\s+\(\s*(?P<occ>[-+]?\d+(?:\.\d+)?)\)\s+"
-        r"(?P<orb_type>[A-Z0-9]+\*?)\s*\(\s*(?P<orb_no>\d+)\)\s+(?P<label>.+?)\s*$"
+        r"(?P<orb_type>[A-Z0-9]+\*?)\s*\(\s*(?P<orb_no>\d+)\)\s*(?P<label>.+?)\s*$"
     )
     # 多中心贡献行，例如：(66.28%) 0.8141* O 1 ...
     _CONTRIB_RE = re.compile(
@@ -465,12 +476,14 @@ class GaussianNBOParser:
             pair.antibond.index: pair for pair in self.bond_antibond_pairs
         }
         if self.debug:
-            print(f"[DEBUG][nbo_parser] orbital_atoms: {self.orbital_atoms}")
-            print("[DEBUG][nbo_parser] Finished parsing NBO output. Summary of parsed data:")
-            print(self.bond_antibond_pairs)
+            logger.debug(f"orbital_atoms: {self.orbital_atoms}")
+            logger.debug("Finished parsing NBO output. Summary of parsed data:")
+            logger.debug(self.nbo_data)
+            logger.debug("Bond-Antibond pair(s):")
+            logger.debug(self.bond_antibond_pairs)
             orbital_type_counter = Counter(orbital.orbital_type for orbital in self.nbo_data)
-            print(f"[DEBUG][nbo_parser] NBO orbital type counts: {dict(orbital_type_counter)}")
-            print(f"[DEBUG][nbo_parser] BD/BD* pair count: {len(self.bond_antibond_pairs)}")
+            logger.debug(f"NBO orbital type counts: {dict(orbital_type_counter)}")
+            logger.debug(f"BD/BD* pair count: {len(self.bond_antibond_pairs)}")
 
     def _parse_hybrid_info(self, text: str) -> NBOHybridInfo:
         """解析 s/p/d/f 杂化文本。"""
@@ -705,7 +718,7 @@ class GaussianNBOParser:
         # 简单的完整性检查
         expected = basis_functions * (basis_functions + 1)
         if arr.size != expected:
-            print(f"Warning: Read {arr.size} coefficients in NBO file, expected {basis_functions+1}*{basis_functions}={expected}.")
+            logger.warning(f"Read {arr.size} coefficients in NBO file, expected {basis_functions+1}*{basis_functions}={expected}.")
             # 如果读取过多，进行截断；如果过少，reshape会抛出异常
             if arr.size > expected:
                 arr = arr[:expected]
@@ -738,7 +751,7 @@ class GaussianNBOParser:
         # 简单的完整性检查
         expected = basis_functions * basis_functions
         if arr.size != expected:
-            print(f"Warning: Read {arr.size} coefficients in PNBO file, expected {basis_functions}*{basis_functions}={expected}.")
+            logger.warning(f"Read {arr.size} coefficients in PNBO file, expected {basis_functions}*{basis_functions}={expected}.")
             # 如果读取过多，进行截断；如果过少，reshape会抛出异常
             if arr.size > expected:
                 arr = arr[:expected]
