@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union, get_args, get_origin, get_type_hints
 import re
 from typing import TYPE_CHECKING
-from pyssian import GaussianInFile
+from pyssian import GaussianInFile, GaussianOutFile
 import numpy as np
 from collections import Counter
 
@@ -200,6 +200,9 @@ class autoVBInputParser:
         return atvb_input
 
     def parse_gaussian(self) -> autoVBInputData:
+        '''
+        解析 Gaussian 格式的 autoVB 输入文件，提取方法、基组、分子结构等信息。
+        '''
         with GaussianInFile(self.input_path) as input_file:
             input_file.read()
         # method和basis不会自动读取，原因是GaussianInFile不支持VB方法的读取，它会识别成一整个参数
@@ -251,7 +254,7 @@ class autoVBInputParser:
         if isinstance(raw, str):
             raw = raw.strip()
         origin = get_origin(target_type)
-        # print(f"Parsing value for key '{key}': raw='{raw}', target_type={target_type}, origin={origin}")
+        logger.debug(f"Parsing value for key '{key}': raw='{raw}', target_type={target_type}, origin={origin}")
         if get_origin(target_type) == Union:
             actual_types = get_args(target_type)
             target_type = actual_types[0]
@@ -337,7 +340,7 @@ class autoVBInputParser:
             try:
                 parsed_value = self.parse_value_by_type(value, target_type, key)
                 setattr(settings, key, parsed_value)
-                # print(f"Set VBSettings.{key} = {parsed_value} (parsed from '{value}')")
+                # logger.debug(f"Set VBSettings.{key} = {parsed_value} (parsed from '{value}')")
             except Exception as e:
                 logger.warning(f"failed to parse value for key '{key}' with raw value '{value}'. Error: {e}. Skipping this option.")
                 continue
@@ -406,9 +409,11 @@ class NBOBondAntibondPair:
     bond: NBOOrbital
     antibond: NBOOrbital
     key: tuple[int, tuple[int, ...]]
+    # 修正后的占据数
+    rectified_occupancy: float = 2.0
 
     def __str__(self):
-        return f"Bond: {self.bond.index} {self.bond.connection} {self.bond.occupancy} Antibond: {self.antibond.index} {self.antibond.connection} {self.antibond.occupancy}\n"
+        return f"Bond: {self.bond.index} {self.bond.connection} {self.bond.occupancy} Antibond: {self.antibond.index} {self.antibond.connection} {self.antibond.occupancy}, Rectified occupancy: {self.rectified_occupancy:.5f}\n"
     
     __repr__ = __str__
 
@@ -452,6 +457,7 @@ class GaussianNBOParser:
         self.debug = debug
         self.basis_function_number = self.mol.nao_nr()
         self.nbo_data = self.parse_out()
+        self.parse_out_by_pyssian()
         self.origin_nbo_orbital_matrix = self.parse_nbo_orbital()
         self.nbo_orbital_matrix: np.ndarray = self.origin_nbo_orbital_matrix[:-1]
         self.occupation_numbers: np.ndarray = self.origin_nbo_orbital_matrix[-1]
@@ -475,6 +481,7 @@ class GaussianNBOParser:
         self.bond_antibond_pair_by_antibond_index = {
             pair.antibond.index: pair for pair in self.bond_antibond_pairs
         }
+        self.rectified_occupancy = self.build_rectified_occupancy()
         if self.debug:
             logger.debug(f"orbital_atoms: {self.orbital_atoms}")
             logger.debug("Finished parsing NBO output. Summary of parsed data:")
@@ -548,7 +555,7 @@ class GaussianNBOParser:
 
     def read_bond_orbital_blocks(self) -> List[str]:
         """
-        读取 Gaussian NBO 输出文件中 Bond orbital 段落，按“每个轨道块”切分。
+        读取 Gaussian NBO 输出文件中 Bond orbital 段落，按每个轨道块切分。
         返回值示例为用户期望的字符串列表。
         """
         lines = self.nbo_output_path.read_text(errors='ignore').splitlines()
@@ -667,6 +674,15 @@ class GaussianNBOParser:
         nbo_data = [self.parse_bond_orbital_block(block) for block in blocks]
         return nbo_data
 
+    def parse_out_by_pyssian(self):
+        '''
+        使用 pyssian 解析 NBO 输出文件。
+        '''
+        with GaussianOutFile(self.nbo_output_path) as GOF:
+            GOF.read()
+        self.gaussian_out_data = GOF
+        return GOF
+
     def build_bond_antibond_pairs(self) -> List[NBOBondAntibondPair]:
         """
         构建成键 BD 与反键 BD* 的对应关系。
@@ -687,11 +703,44 @@ class GaussianNBOParser:
             antibond = antibonds.get(key)
             if antibond is None:
                 continue
-            pairs.append(NBOBondAntibondPair(bond=bond, antibond=antibond, key=key))
+            else:
+                # 构造修正占据数：假设 BD/BD* 对的总占据数应该接近 2，按照比例调整 BD 的占据数以反映实际偏离。
+                total_occ = bond.occupancy + antibond.occupancy
+                rectified_occupancy = bond.occupancy / (total_occ / 2)
+                logger.debug(f"Found BD/BD* pair with key {key}: Bond occ={bond.occupancy}, Antibond occ={antibond.occupancy}, total={total_occ:.5f}, rectified={rectified_occupancy:.5f}")
+            pairs.append(NBOBondAntibondPair(bond=bond, rectified_occupancy=rectified_occupancy, antibond=antibond, key=key))
 
         pairs.sort(key=lambda pair: pair.bond.index)
         return pairs
     
+    def build_rectified_occupancy(self) -> np.ndarray:
+        """
+        构造修正占据数数组。
+
+        对 BD 轨道，如果能找到对应的 BD* 轨道，则假设该 BD/BD* 对总占据数
+        应接近 2，并按 `BD占据数 / ((BD占据数 + BD*占据数) / 2)` 修正。
+        其他轨道类型直接使用原始 NBO 占据数。
+
+        Returns:
+            np.ndarray: 与 `self.occupation_numbers` 等长的修正占据数数组，
+            下标仍为 0-based 轨道索引。
+        """
+        rectified_occupancy = np.array(self.occupation_numbers, dtype=float, copy=True)
+        self.rectified_occupancy_dict: Dict[int, float] = {}
+
+        for orbital in self.nbo_data:
+            if orbital.orbital_type == "BD" and orbital.index in self.bond_antibond_pair_by_bond_index:
+                rectified_value = self.bond_antibond_pair_by_bond_index[
+                    orbital.index
+                ].rectified_occupancy
+            else:
+                rectified_value = orbital.occupancy
+
+            rectified_occupancy[orbital.index - 1] = rectified_value
+            self.rectified_occupancy_dict[orbital.index] = rectified_value
+
+        return rectified_occupancy
+
     def parse_nbo_orbital(self) -> np.ndarray:
         """
         读取并解析 NBO .37 文件中的轨道数据，返回二维系数矩阵。

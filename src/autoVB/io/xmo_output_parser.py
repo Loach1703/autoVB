@@ -4,12 +4,18 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, ClassVar, TypeAlias
 
 from ..utils.constants import SUPPORTED_METHODS
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
+
+Pair: TypeAlias = tuple[int, int]
+CtrlOptions: TypeAlias = dict[str, str | bool]
+ConvergenceRow: TypeAlias = dict[str, int | float]
+JsonDict: TypeAlias = dict[str, Any]
+
 
 @dataclass(slots=True)
 class XmoGeometryAtom:
@@ -59,13 +65,13 @@ class XmoStructureWeight:
     index: int
     weight: float
     structure_name: str
-    inactive_orbital_ranges: list[tuple[int, int]] = field(default_factory=list)
-    orbital_connections: list[tuple[int, int]] = field(default_factory=list)
-    atom_connections: list[tuple[int, int]] = field(default_factory=list)
+    inactive_orbital_ranges: list[Pair] = field(default_factory=list)
+    orbital_connections: list[Pair] = field(default_factory=list)
+    atom_connections: list[Pair] = field(default_factory=list)
     flat_orbitals: list[int] = field(default_factory=list)
     flat_atoms: list[int] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """将权重信息转换为适合 JSON 输出的字典。
 
         Returns:
@@ -85,7 +91,7 @@ class XmoStructureWeight:
         }
 
     @staticmethod
-    def _pair_dicts(pairs: list[tuple[int, int]]) -> list[dict[str, int]]:
+    def _pair_dicts(pairs: list[Pair]) -> list[dict[str, int]]:
         return [{"begin": begin, "end": end} for begin, end in pairs]
 
 
@@ -104,6 +110,13 @@ class XmoParsedData:
         orbital_to_atom: 活性轨道编号到 `$geo` 原子编号的映射。
         geo: `$geo` 片段中的原子坐标列表。
         geo_text: `$geo` 片段中的纯文本坐标，不包含 `$geo` 和 `$end` 标记。
+        steps: 收敛所用迭代步数；若未找到则为 `None`。
+        energy: 按方法选取的收敛摘要最终能量；若未找到则为 `None`。
+        energy_terms: 收敛摘要中的可变能量项，例如 `vbscf_energy`、
+            `total_energy`、`correlation_energy`、`lam_dfvb_energy`、
+            `dfvb_correlation_energy` 和 `lambda_parameter`。
+        convergence_process: 收敛迭代表，包含 `iter`、`energy`、`de`、`gnorm`
+            等列；若未找到则为空列表。
         cc_weights: `WEIGHTS OF STRUCTURES` 表中的 CC 权重。
         lowdin_weights: `Lowdin Weights` 表中的 Lowdin 权重。
         inverse_weights: `Inverse Weights` 表中的权重。
@@ -113,19 +126,23 @@ class XmoParsedData:
     source_file: Path
     method: str
     basis: str
-    ctrl_options: dict[str, str | bool]
+    ctrl_options: CtrlOptions
     nae: int
     nao: int
     orb: list[list[int]]
     orbital_to_atom: dict[int, int]
     geo: list[XmoGeometryAtom]
     geo_text: str
+    steps: int | None
+    energy: float | None
+    energy_terms: dict[str, float]
+    convergence_process: list[ConvergenceRow]
     cc_weights: list[XmoStructureWeight]
     lowdin_weights: list[XmoStructureWeight]
     inverse_weights: list[XmoStructureWeight]
     renormalized_weights: list[XmoStructureWeight]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """将完整解析结果转换为适合 JSON 输出的字典。
 
         Returns:
@@ -142,6 +159,12 @@ class XmoParsedData:
             "orbital_to_atom": self.orbital_to_atom,
             "geo": [atom.to_dict() for atom in self.geo],
             "geo_text": self.geo_text,
+            "steps": self.steps,
+            "energy": self.energy,
+            "steps": self.steps,
+            "energy": self.energy,
+            "energy_terms": self.energy_terms,
+            "convergence_process": self.convergence_process,
             "cc_weights": [weight.to_dict() for weight in self.cc_weights],
             "lowdin_weights": [weight.to_dict() for weight in self.lowdin_weights],
             "inverse_weights": [weight.to_dict() for weight in self.inverse_weights],
@@ -166,15 +189,34 @@ class XmoParsedData:
 class XmoParser:
     """解析 XMVb `.xmo` 输出文件中的输入片段和权重表。"""
 
-    _SECTION_END = "$end"
-    _WEIGHT_ROW_RE = re.compile(
+    _SECTION_END: ClassVar[str] = "$end"
+    _WEIGHT_ROW_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"^\s*(?P<index>\d+)\s+"
         r"(?P<weight>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)\s+"
         r"\*+\s+"
         r"(?P<structure>.+?)\s*$"
     )
-    _REPEAT_INT_RE = re.compile(r"^(?P<value>[-+]?\d+)\*(?P<count>\d+)$")
-    _INT_RANGE_RE = re.compile(r"^(?P<begin>\d+)-(?P<end>\d+)$")
+    _REPEAT_INT_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<value>[-+]?\d+)\*(?P<count>\d+)$"
+    )
+    _INT_RANGE_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<begin>\d+)-(?P<end>\d+)$"
+    )
+    _CONVERGED_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\bconverged\s+in\s+(?P<steps>\d+)\s+iterations\b",
+        re.IGNORECASE,
+    )
+    _TOTAL_ENERGY_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\s*Total Energy:\s*"
+        r"(?P<energy>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)\s*$",
+        re.IGNORECASE,
+    )
+    _ENERGY_TERM_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^\s*(?P<label>VBSCF Energy|Total Energy|Correlation Energy|"
+        r"LAM-DFVB Energy|DFVB Correlation Energy|LAMBDA Parameter)\s*:\s*"
+        r"(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?)\s*$",
+        re.IGNORECASE,
+    )
 
     def __init__(self, xmo_file: str | Path) -> None:
         """初始化解析器。
@@ -195,17 +237,25 @@ class XmoParser:
             ValueError: 文件中缺少必需片段或片段格式不符合预期。
         """
         lines = self._read_lines()
+
+        # 先提取 XMO 中回显的输入片段，后续解析都基于这些块。
         ctrl_lines = self._section_lines(lines, "$ctrl")
         orb_lines = self._section_lines(lines, "$orb")
         geo_lines = self._section_lines(lines, "$geo")
+
+        # $ctrl 决定方法、基组和活性空间大小；$orb 决定轨道到原子的映射
         ctrl_options = self._parse_ctrl_options(ctrl_lines)
+        method = self._parse_method(ctrl_lines)
         nao = self._parse_required_int(ctrl_lines, "nao")
         orb = self._parse_orb(orb_lines)
         orbital_to_atom = self._active_orbital_to_atom(orb, nao)
 
+        # 能量摘要是可变字段，不同方法会给出不同的能量项，因此单独解析成字典供后续按需选取。
+        energy_terms = self._parse_energy_terms(lines)
+
         return XmoParsedData(
             source_file=self.xmo_file,
-            method=self._parse_method(ctrl_lines),
+            method=method,
             basis=str(ctrl_options.get("basis", "")),
             ctrl_options=ctrl_options,
             nae=self._parse_required_int(ctrl_lines, "nae"),
@@ -214,6 +264,10 @@ class XmoParser:
             orbital_to_atom=orbital_to_atom,
             geo=self._parse_geo(geo_lines),
             geo_text=self._section_plain_text(geo_lines),
+            steps=self._parse_convergence_steps(lines),
+            energy=self._parse_convergence_energy(method, energy_terms),
+            energy_terms=energy_terms,
+            convergence_process=self._parse_convergence_process(lines),
             cc_weights=self._parse_weight_table(
                 lines,
                 "WEIGHTS OF STRUCTURES",
@@ -324,7 +378,7 @@ class XmoParser:
 
         raise ValueError("Cannot find method in $ctrl section.")
 
-    def _parse_ctrl_options(self, lines: list[str]) -> dict[str, str | bool]:
+    def _parse_ctrl_options(self, lines: list[str]) -> CtrlOptions:
         """解析 `$ctrl` 中的键值和开关型选项。
 
         Args:
@@ -333,7 +387,7 @@ class XmoParser:
         Returns:
             控制选项字典；无等号的选项保存为 `True`。
         """
-        options: dict[str, str | bool] = {}
+        options: CtrlOptions = {}
         method = self._parse_method(lines)
         method_key = method.split("=", 1)[0].lower()
         options["method"] = method
@@ -356,6 +410,7 @@ class XmoParser:
                     index += 1
                     continue
 
+                # 支持 `key=value` 形式。
                 if "=" in token:
                     key, value = token.split("=", 1)
                     if value == "" and index + 1 < len(tokens):
@@ -363,10 +418,12 @@ class XmoParser:
                         value = tokens[index]
                     if key:
                         yield key.lower(), value
+                # 支持 `key = value` 形式。
                 elif index + 2 < len(tokens) and tokens[index + 1] == "=":
                     yield token.lower(), tokens[index + 2]
                     index += 2
                 else:
+                    # 无等号 token 作为开关项，例如 `sort`。
                     yield token.lower(), None
 
                 index += 1
@@ -400,6 +457,7 @@ class XmoParser:
 
             row: list[int] = []
             for token in clean_line.split():
+                # XMO 用 1*6 表示连续六个 1。
                 repeat_match = self._REPEAT_INT_RE.match(token)
                 if repeat_match:
                     value = int(repeat_match.group("value"))
@@ -407,6 +465,7 @@ class XmoParser:
                     row.extend([value] * count)
                     continue
 
+                # $orb 中的 1-52 表示从 1 到 52 的完整整数序列。
                 range_match = self._INT_RANGE_RE.match(token)
                 if range_match:
                     begin = int(range_match.group("begin"))
@@ -431,6 +490,7 @@ class XmoParser:
         nao: int,
     ) -> dict[int, int]:
         """根据 `$orb` 最后 `nao` 行建立活性轨道到原子的映射。"""
+        # XMVB 的活性轨道位于 `$orb` 末尾，第一列是该轨道主要归属原子。
         active_orb_rows = orb[-nao:]
         active_start_orbital = len(orb) - nao + 1
         return {
@@ -492,6 +552,114 @@ class XmoParser:
                 clean_lines.append(clean_line)
         return "\n".join(clean_lines)
 
+    def _parse_convergence_steps(self, lines: list[str]) -> int | None:
+        """读取 `VBSCF converged in N iterations` 中的收敛步数。"""
+        for line in lines:
+            match = self._CONVERGED_RE.search(line)
+            if match:
+                return int(match.group("steps"))
+        return None
+
+    def _parse_convergence_energy(
+        self,
+        method: str,
+        energy_terms: dict[str, float],
+    ) -> float | None:
+        """按方法读取收敛摘要中的最终能量。"""
+        method_name = method.split("=", 1)[0].lower()
+
+        # 后相关/DFVB 方法的最终能量有不一样的名字，所以只好特例判断
+        if method_name == "lam-dfvb":
+            return energy_terms.get("lam_dfvb_energy")
+        if method_name == "vbpt2":
+            return energy_terms.get("total_energy")
+        if "total_energy" in energy_terms:
+            return energy_terms["total_energy"]
+
+        return None
+
+    def _parse_energy_terms(self, lines: list[str]) -> dict[str, float]:
+        """读取收敛摘要中的可变能量项。"""
+        terms: dict[str, float] = {}
+        found_convergence = False
+        start_index = 0
+        for index, line in enumerate(lines):
+            if self._CONVERGED_RE.search(line):
+                found_convergence = True
+                start_index = index
+                break
+
+        # 只读取收敛摘要块，避免把后续 virial analysis 里的 TOTAL ENERGY 混进来。
+        for line in lines[start_index:]:
+            if found_convergence and line.strip().startswith("******"):
+                break
+            match = self._ENERGY_TERM_RE.match(line)
+            if not match:
+                continue
+            terms[self._energy_term_key(match.group("label"))] = float(
+                match.group("value")
+            )
+        return terms
+
+    @staticmethod
+    def _energy_term_key(label: str) -> str:
+        return label.lower().replace("-", "_").replace(" ", "_")
+
+    def _parse_convergence_process(
+        self,
+        lines: list[str],
+    ) -> list[ConvergenceRow]:
+        """读取收敛迭代表。
+
+        表头通常为 `ITER ENERGY DE GNORM`，有些 XMO 会额外包含 `TIME` 列。
+        """
+        for index, line in enumerate(lines):
+            columns = line.split()
+            if not self._is_convergence_header(columns):
+                continue
+
+            # 表头列名直接作为字典键，因此额外的 TIME 列也能自然保留。
+            keys = [column.lower() for column in columns]
+            process: list[ConvergenceRow] = []
+            for row_line in lines[index + 1 :]:
+                row = self._parse_convergence_row(row_line, keys)
+                if row is None:
+                    if process:
+                        break
+                    continue
+                process.append(row)
+            return process
+
+        return []
+
+    @staticmethod
+    def _is_convergence_header(columns: list[str]) -> bool:
+        normalized_columns = [column.upper() for column in columns]
+        return len(normalized_columns) >= 4 and normalized_columns[:4] == [
+            "ITER",
+            "ENERGY",
+            "DE",
+            "GNORM",
+        ]
+
+    @staticmethod
+    def _parse_convergence_row(
+        line: str,
+        keys: list[str],
+    ) -> ConvergenceRow | None:
+        parts = line.split()
+        if len(parts) < len(keys):
+            return None
+
+        try:
+            row: ConvergenceRow = {"iter": int(parts[0])}
+            for key, value in zip(keys[1:], parts[1:]):
+                row[key] = float(value)
+        except ValueError:
+            return None
+
+        return row
+
     def _parse_weight_table(
         self,
         lines: list[str],
@@ -520,7 +688,8 @@ class XmoParser:
             match = self._WEIGHT_ROW_RE.match(line)
             if match:
                 structure_name = match.group("structure").strip()
-                # print(structure_name)
+
+                # 结构名先解析为轨道连接，再通过 `$orb` 映射成原子连接。
                 orbital_connections = self._parse_structure_orbital_connections(
                     structure_name
                 )
@@ -558,9 +727,9 @@ class XmoParser:
     def _parse_inactive_orbital_ranges(
         self,
         structure_name: str,
-    ) -> list[tuple[int, int]]:
+    ) -> list[Pair]:
         """解析 `1:30` 这类非活性/闭壳层轨道范围。"""
-        ranges: list[tuple[int, int]] = []
+        ranges: list[Pair] = []
         for token in structure_name.split():
             if ":" not in token:
                 continue
@@ -572,13 +741,14 @@ class XmoParser:
     def _parse_structure_orbital_connections(
         self,
         structure_name: str,
-    ) -> list[tuple[int, int]]:
+    ) -> list[Pair]:
         """解析结构名中的活性轨道连接。"""
-        connections: list[tuple[int, int]] = []
+        connections: list[Pair] = []
         pending_single_orbital: int | None = None
 
         for token in structure_name.split():
             if ":" in token:
+                # `1:30` 表示闭壳层/非活性轨道范围，不属于活性连接。
                 continue
             if "-" in token:
                 if pending_single_orbital is not None:
@@ -594,6 +764,7 @@ class XmoParser:
             if token.isdigit():
                 orbital_number = int(token)
                 if pending_single_orbital is None:
+                    # 两个连续的单独数字表示同一个结构连接，例如 `32 32`。
                     pending_single_orbital = orbital_number
                 else:
                     connections.append((pending_single_orbital, orbital_number))
@@ -609,19 +780,17 @@ class XmoParser:
 
     def _map_orbital_connections(
         self,
-        orbital_connections: list[tuple[int, int]],
+        orbital_connections: list[Pair],
         orbital_to_atom: dict[int, int],
-    ) -> list[tuple[int, int]]:
+    ) -> list[Pair]:
         """把活性轨道连接映射为原子连接。"""
-        # print(orbital_to_atom)
-        # print(orbital_connections)
         return [
             (orbital_to_atom[begin], orbital_to_atom[end])
             for begin, end in orbital_connections
         ]
 
     @staticmethod
-    def _flatten_pairs(pairs: list[tuple[int, int]]) -> list[int]:
+    def _flatten_pairs(pairs: list[Pair]) -> list[int]:
         """把连接对展平为连续整数序列。"""
         return [value for pair in pairs for value in pair]
 

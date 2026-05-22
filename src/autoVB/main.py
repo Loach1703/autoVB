@@ -27,6 +27,7 @@ from pyscf import gto
 if TYPE_CHECKING:
     from .io.readers import NBOOrbital
     from .io.writers import XMIData
+    from .io.xmo_output_parser import XmoParsedData
 
 
 logger = get_logger(__name__)
@@ -53,6 +54,7 @@ class VBSettings:
     bond_first: bool = False
     nolp: bool = False
     threshold: float = 0
+    rethre: float = 0
     stru: str = "default"
     sort: bool = False
     novb: bool = False
@@ -308,6 +310,7 @@ class XMVBNBO:
             self.orbital_matrix = self.nbo_parser.nbo_orbital_matrix
 
         self.occupation_numbers = self.nbo_parser.occupation_numbers
+        self.rectified_occupancy = self.nbo_parser.rectified_occupancy
         self.orbital_atoms = self.nbo_parser.orbital_atoms
     
     ##### 处理轨道，构造分块（分为occ，vir，act，ina） #####
@@ -355,10 +358,11 @@ class XMVBNBO:
 
         self.active_indices = active_indices
         self.inactive_indices = inactive_indices
-        self.active_orbital_matrix = self.occupation_orbital_matrix[active_indices]
+        # self.active_orbital_matrix = self.occupation_orbital_matrix[active_indices]
+        self.active_orbital_matrix = self.orbital_matrix[active_indices]
         self.inactive_orbital_matrix = self.occupation_orbital_matrix[inactive_indices]
         self.active_orb_atom = [
-            self.occ_orb_atom[idx]
+            self.orbital_atoms[idx]
             for idx in active_indices
         ]
         self.inactive_orb_atom = [
@@ -381,42 +385,34 @@ class XMVBNBO:
 
     ##### 自动选择活性空间 #####
 
-    def auto_select_active_space(self, threshold: float=1.8, auto_set=False) -> tuple[int, int]:
+    def auto_select_active_space(self, threshold: float=1.8, auto_set=False) -> tuple[int, int, List[int]]:
         '''
         根据NBO占据数自动选择活性空间，返回活性电子数, 活性轨道数
         Args:
             threshold (float): 活性空间选择的占据数阈值，选择占据数小于等于该阈值的轨道作为活性轨道
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
         Returns:
-            tuple: (tuple[int, int]): 活性电子数, 活性轨道数
+            tuple: (tuple[int, int, List[int]]): 活性电子数, 活性轨道数, 活性轨道索引列表
         '''
         active_orbital = 0
         active_electron = 0
-        active_orbital_indices = []
-        active_orbital_matrix = []
+        active_orbital_indices: list[int] = []
         # 筛选占据数大于1且小于等于threshold的轨道
         valid_occupied_indices = np.where((self.occupation_numbers > 1.0) & (self.occupation_numbers <= threshold))[0]
-        
-        # 填充到 indices 和 matrix 中
+        # 填充到 aoi 中
         active_orbital_indices = valid_occupied_indices.tolist()
-        active_orbital_matrix = self.orbital_matrix[valid_occupied_indices]
+        nbo_data = self.nbo_parser.nbo_data
 
-        # 调用 get_orbital_atom_contribution 判断这些轨道在哪些原子上
-        # 返回结构类似 [[1, 2], [3, 4]]
-        orb_atoms = get_orbital_atom_contribution(active_orbital_matrix, self.mol)
-        orb_atoms_flat = [j for i in orb_atoms for j in i]
-
-        for i, occ, j in zip(active_orbital_indices, self.occupation_numbers[valid_occupied_indices], range(len(active_orbital_indices))):
+        # 只是打印选出的活性轨道的信息，并没有业务逻辑上的作用
+        for i in active_orbital_indices:
             atom_name_list = []
-            for a in orb_atoms[j]:
-                an = self.mol.atom_pure_symbol(a-1)
-                atom_name_list.append(f'{an}{a}')
+            for a in nbo_data[i].atoms:
+                atom_name_list.append(f'{a[0]}{a[1]}')
             atom_name = ','.join(atom_name_list)
-            logger.info(f"Selected NBO orbital {i+1}, Occupation number: {occ:.4f}, Atom(s): {atom_name}")
+            logger.info(f"Selected NBO orbital {i+1}, Occupation number: {nbo_data[i].occupancy:.4f}, Atom(s): {atom_name}")
 
-        # 计算出活性轨道数量（等于各条轨道包含的原子数） 活性电子数量（等于所需要使用的NBO轨道数量的两倍）
-        active_orbital = len(orb_atoms_flat)
-        active_electron = len(active_orbital_indices) * 2
+        # 计算出活性轨道数量，活性电子数量
+        self.get_as_from_aoi(active_orbital_indices)
         if auto_set == True:
             if active_orbital == 0 or active_electron == 0:
                 raise ValueError("No active orbitals selected based on the given threshold. Please adjust the threshold or check the occupation numbers.")
@@ -425,45 +421,86 @@ class XMVBNBO:
                 logger.info(f"Automatically setting active space: {active_electron} electrons / {active_orbital} orbitals")
                 self.set_active_space(active_electron, active_orbital)
         
-        return active_electron, active_orbital
+        return active_electron, active_orbital, active_orbital_indices
 
-    def auto_select_active_space_iter(self, auto_set=False) -> tuple[int, int]:
+    def auto_select_active_space_by_rethre(self, threshold: float=1.95, auto_set=False) -> tuple[int, int, List[int]]:
         '''
-        通过最小大于1的占据数+0.1的方式选择活性轨道，返回活性电子数, 活性轨道数
+        根据NBO占据数自动选择活性空间，返回活性电子数, 活性轨道数
         Args:
+            threshold (float): 活性空间选择的占据数阈值，选择占据数小于等于该阈值的轨道作为活性轨道
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
         Returns:
-            tuple: (tuple[int, int]): 活性电子数, 活性轨道数
+            tuple: (tuple[int, int, List[int]]): 活性电子数, 活性轨道数, 活性轨道索引列表
+        '''
+        active_orbital = 0
+        active_electron = 0
+        active_orbital_indices: list[int] = []
+        logger.info(f"Selecting active space based on rectified occupancy with threshold {threshold:.2f}...")
+        # 筛选占据数大于1且小于等于threshold的轨道
+        valid_occupied_indices = np.where((self.rectified_occupancy > 1.0) & (self.rectified_occupancy <= threshold))[0]
+        # 填充到 aoi 中
+        active_orbital_indices = valid_occupied_indices.tolist()
+        nbo_data = self.nbo_parser.nbo_data
+
+        # 只是打印选出的活性轨道的信息，并没有业务逻辑上的作用
+        for i in active_orbital_indices:
+            atom_name_list = []
+            for a in nbo_data[i].atoms:
+                atom_name_list.append(f'{a[0]}{a[1]}')
+            atom_name = ','.join(atom_name_list)
+            logger.info(f"Selected NBO orbital {i+1}, Occupation number: {nbo_data[i].occupancy:.5f}, Rectified occupancy: {self.rectified_occupancy[i]:.5f}, Atom(s): {atom_name}")
+
+        # 计算出活性轨道数量，活性电子数量
+        self.get_as_from_aoi(active_orbital_indices)
+        if auto_set == True:
+            if active_orbital == 0 or active_electron == 0:
+                raise ValueError("No active orbitals selected based on the given threshold. Please adjust the threshold or check the occupation numbers.")
+            else:
+                # 自动将该属性应用到类中
+                logger.info(f"Automatically setting active space: {active_electron} electrons / {active_orbital} orbitals")
+                self.set_active_space(active_electron, active_orbital)
+        
+        return active_electron, active_orbital, active_orbital_indices
+
+    def auto_select_active_space_iter(self, auto_set=False, max_threshold=1.96) -> tuple[int, int, List[int]]:
+        '''
+        通过最小大于1的占据数+0.005的方式选择活性轨道，返回活性电子数, 活性轨道数
+        Args:
+            auto_set (bool): 是否自动将选择的活性空间设置，默认False
+            max_threshold (float): 最大阈值
+        Returns:
+            tuple: (tuple[int, int, List[int]]): 活性电子数, 活性轨道数, 活性轨道索引列表
         '''
         valid_occupations = self.occupation_numbers[self.occupation_numbers > 1.0]
         # 阈值不能超过1.96，基本可以排除大多数sigma键
-        threshold = min(float(valid_occupations.min()) + 0.1, 1.96)
-        nae, nao = self.auto_select_active_space(threshold=threshold, auto_set=False)
+        threshold = min(float(valid_occupations.min()) + 0.005, max_threshold)
+        nae, nao, aoi = self.auto_select_active_space(threshold=threshold, auto_set=False)
         # 检查选出的活性轨道数量
         logger.info(f"Automatically selected active space with threshold {threshold:.2f}: {nae} electrons / {nao} orbitals.")
         # 如果活性轨道过多，则降低活性空间的选择阈值
-        if nao >= 15 or nae >= 15:
+        if nao >= 14 or nae >= 14:
             logger.warning(f"Automatically selected active space has  {nae} electrons / {nao} orbitals, trying to reduce the threshold to select fewer active orbitals......")
             for _ in range(100):
-                if nao < 15:
+                if nao < 14:
                     break
-                threshold -= 0.01
-                nae, nao = self.auto_select_active_space(threshold=threshold, auto_set=False)
+                threshold -= 0.005
+                nae, nao, aoi = self.auto_select_active_space(threshold=threshold, auto_set=False)
                 logger.info(f"Trying threshold {threshold:.2f}: {nae} electrons / {nao} orbitals")
         # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
-        if nao >= 15 or nae >= 15:
+        if nao >= 14 or nae >= 14:
             logger.warning(f"Automatically selected active space has  {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
         if auto_set:
             logger.info(f"Automatically setting active space: {nae} electrons / {nao} orbitals")
             self.set_active_space(nae, nao)
-        return nae, nao
+        return nae, nao, aoi
     
     def auto_select_active_space_default(self, auto_set=False) -> tuple[int, int, List[int]]:
         '''
         默认选择活性空间的方式，目标轨道为：
         1. BD轨道，成键占据数小于1.96的轨道
-        2. BD轨道，成键小于1.99，同时反键大于0.08，（这个类型可以称为BD-BD*）
+        2. BD轨道，成键小于1.99，同时反键大于0.06，（这个类型可以称为BD-BD*）
         3. LP轨道，占据数小于1.96的轨道
+        4. 如果按照上述规则无法选到任何活性空间（这代表所有轨道都接近双占），则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.005的方式选择活性轨道
         Args:
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
         Returns:
@@ -473,7 +510,7 @@ class XMVBNBO:
         threshold_bd_bonding_min = 1.9
         threshold_bd_bonding_star = 1.99
         threshold_bd_bonding_star_min = 1.9
-        threshold_bd_antibonding = 0.08
+        threshold_bd_antibonding = 0.06
         threshold_bd_antibonding_min = 0.15
         threshold_lp = 1.96
         threshold_lp_min = 1.9
@@ -481,24 +518,8 @@ class XMVBNBO:
         nolp = self.input_data.vbsettings.nolp
 
         # 开始挑轨道，计算nae和nao，从self.nbo_parser中读取 NBO 轨道信息
-        # 每个BD轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个BD轨道对应 nao + 2
-        # 每个LP轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个LP轨道对应 nao + 1
 
-        def electron_count(occupation: float) -> int:
-            if occupation > 1.0:
-                return 2
-            if 0.0 < occupation <= 1.0:
-                return 1
-            return 0
-
-        # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection的长度
-        def orbital_nao(orbital: 'NBOOrbital') -> int:
-            # if orbital.orbital_type == "LP":
-            #     return 1
-            # if orbital.orbital_type == "BD":
-            #     return 2
-            return len(orbital.connection)
-
+        # 子函数：添加满足条件的轨道到选中列表中，并记录筛选原因
         def add_orbital(selected_orbitals: Dict[int, Dict], orbital: 'NBOOrbital', reason: str) -> None:
             # 同一个BD轨道可能同时满足BD低占据数和BD-BD*规则，这里用index去重，只追加筛选原因。
             selected = selected_orbitals.setdefault(
@@ -555,8 +576,7 @@ class XMVBNBO:
 
             # NBO输出中的轨道编号从1开始；矩阵切片需要0-based索引，所以这里统一减一
             active_indices = [item["orbital"].index - 1 for item in selected_items]
-            nae = sum(electron_count(item["orbital"].occupancy) for item in selected_items)
-            nao = sum(orbital_nao(item["orbital"]) for item in selected_items)
+            nae, nao = self.get_as_from_aoi(active_indices)
             if debug:
                 logger.debug(
                     f"thresholds: BD<{bd_bonding_threshold:.3f}, "
@@ -566,8 +586,9 @@ class XMVBNBO:
                 logger.debug(f"rule hits before dedupe: {rule_hits}")
             return nae, nao, active_indices, selected_items
 
+        # 子函数：检查选出的活性空间是否在合理范围内，这里以14为一个经验阈值，认为超过14就可能过大了
         def under_limit(selected_nae: int, selected_nao: int) -> bool:
-            return selected_nae < 15 and selected_nao < 15
+            return selected_nae < 14 or selected_nao < 14
 
         nae, nao, active_indices, selected_items = select_orbitals(
             threshold_bd_bonding,
@@ -586,6 +607,7 @@ class XMVBNBO:
             f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
             f"LP<{threshold_lp:.3f}"
         )
+        # 如果选择轨道不为空，则打印每个被选中轨道的详细信息，包括轨道编号、类型、占据数、对应原子以及被选中的原因
         if selected_items:
             for item in selected_items:
                 orbital: 'NBOOrbital' = item["orbital"]
@@ -607,17 +629,17 @@ class XMVBNBO:
         else:
             logger.info("No active orbitals selected by default thresholds.")
 
-        # 如果 nae/nao 过多（大于15），则降低活性空间的选择阈值，每次降低0.01，直到 nae/nao 小于15
+        # 如果 nae/nao 过多（大于14），则降低活性空间的选择阈值，每次降低0.005，直到 nae/nao 其中之一小于14
         # 降低阈值的逻辑（1，2，3每一步都尝试重新选取活性空间）：
-        # 1. LP轨道，占据数阈值降低0.01（下限为1.9）
-        # 2. BD-BD*轨道，成键阈值降低0.005，反键阈值提高0.005（下限为1.9，上限为0.15）
-        # 3. BD轨道，占据数阈值降低0.01（下限为1.9）
+        # 1. LP轨道，占据数阈值降低0.005（下限为1.9）
+        # 2. BD-BD*轨道，成键阈值降低0.001，反键阈值提高0.003（下限为1.9，上限为0.15）
+        # 3. BD轨道，占据数阈值降低0.005（下限为1.9）
         # 1-3如此循环，直到达到合理的活性空间大小或者所有阈值都降低到下限仍然过大则停止
         while not under_limit(nae, nao):
             changed = False
 
             if threshold_lp > threshold_lp_min:
-                threshold_lp = max(threshold_lp_min, round(threshold_lp - 0.01, 10))
+                threshold_lp = max(threshold_lp_min, round(threshold_lp - 0.005, 10))
                 changed = True
                 nae, nao, active_indices, selected_items = select_orbitals(
                     threshold_bd_bonding,
@@ -635,9 +657,9 @@ class XMVBNBO:
 
             if threshold_bd_bonding_star > threshold_bd_bonding_star_min or threshold_bd_antibonding < threshold_bd_antibonding_min:
                 if threshold_bd_bonding_star > threshold_bd_bonding_star_min:
-                    threshold_bd_bonding_star = max(threshold_bd_bonding_star_min, round(threshold_bd_bonding_star - 0.005, 10))
+                    threshold_bd_bonding_star = max(threshold_bd_bonding_star_min, round(threshold_bd_bonding_star - 0.003, 10))
                 if threshold_bd_antibonding < threshold_bd_antibonding_min:
-                    threshold_bd_antibonding = min(threshold_bd_antibonding_min, round(threshold_bd_antibonding + 0.005, 10))
+                    threshold_bd_antibonding = min(threshold_bd_antibonding_min, round(threshold_bd_antibonding + 0.001, 10))
                 changed = True
                 nae, nao, active_indices, selected_items = select_orbitals(
                     threshold_bd_bonding,
@@ -654,7 +676,7 @@ class XMVBNBO:
                     break
 
             if threshold_bd_bonding > threshold_bd_bonding_min:
-                threshold_bd_bonding = max(threshold_bd_bonding_min, round(threshold_bd_bonding - 0.01, 10))
+                threshold_bd_bonding = max(threshold_bd_bonding_min, round(threshold_bd_bonding - 0.005, 10))
                 changed = True
                 nae, nao, active_indices, selected_items = select_orbitals(
                     threshold_bd_bonding,
@@ -676,8 +698,12 @@ class XMVBNBO:
         # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
         if not under_limit(nae, nao):
             logger.warning(f"Automatically selected active space has {nae} electrons / {nao} orbitals, which may be too large for VB calculations. Consider manually selecting the active space.")
+        
+        # 如果最终选出的活性空间为空，则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.005的方式选择活性轨道
         if nae == 0 or nao == 0:
-            raise ValueError("No active orbitals selected by default rules. Please manually select the active space or check the NBO occupation numbers.")
+            logger.warning(f"No active orbitals selected by default rules. Trying use iterative method based on minimum occupation number to select active orbitals...")
+            nae, nao, active_indices = self.auto_select_active_space_iter(auto_set=auto_set, max_threshold=2.00)
+            # raise ValueError("No active orbitals selected by default rules. Please manually select the active space or check the NBO occupation numbers.")
 
         logger.info(f"Final default active space: {nae} electrons / {nao} orbitals")
         active_indices_1based = [idx + 1 for idx in active_indices]
@@ -731,6 +757,7 @@ class XMVBNBO:
         aoa_bond = self.input_data.vbsettings.aoa_bond
         aoi = self.input_data.vbsettings.aoi
         threshold = self.input_data.vbsettings.threshold
+        rethre = self.input_data.vbsettings.rethre
         nae = self.active_electron
         nao = self.active_orbital
         # aoa参数，根据原子来判断活性轨道
@@ -754,7 +781,8 @@ class XMVBNBO:
             active_indices = []
             for idx in aoi_1based:
                 if idx < 1 or idx > occ_norb:
-                    raise ValueError(f"Active Orbital Indices index {idx} is out of range. Valid range is [1, {occ_norb}] for occupied orbitals.")
+                    logger.warning(f"Active Orbital Indices index {idx} is out of range. Valid range is [1, {occ_norb}] for occupied orbitals.")
+                    # raise ValueError(f"Active Orbital Indices index {idx} is out of range. Valid range is [1, {occ_norb}] for occupied orbitals.")
                 active_indices.append(idx - 1)
 
         # 手动指定了活性空间，但没有aoa
@@ -763,8 +791,12 @@ class XMVBNBO:
 
         # 手动设置了挑选阈值
         elif threshold > 1:
-            nae, nao = self.auto_select_active_space(threshold=threshold)
-            active_indices = self.get_active_orbital_indices(nae, nao)
+            nae, nao, active_indices = self.auto_select_active_space(threshold=threshold)
+            # active_indices = self.get_active_orbital_indices(nae, nao)
+
+        # rethre，修正占据数的测试
+        elif rethre > 1:
+            nae, nao, active_indices = self.auto_select_active_space_by_rethre(threshold=rethre)
 
         # 没有任何设置，自动挑选
         else:
@@ -965,6 +997,11 @@ class XMVBNBO:
         nao = 0
         nae = 0
         nbo_data = self.nbo_parser.nbo_data
+        
+        # 每个BD轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个BD轨道对应 nao + 2
+        # 每个LP轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个LP轨道对应 nao + 1
+        # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection的长度
+        
         for idx in active_indices:
             occupancy = nbo_data[idx].occupancy
             if occupancy > 1.0:
@@ -1358,7 +1395,7 @@ class autoVBMain:
             xmidata = wxp.get_xmidata()
 
         else:
-            log_subroutine(f"Entry {method.upper()} Method - Auto active space selection")
+            log_subroutine(f"Entry auto active space selection")
             nae, nao, active_indices = wxp.get_aoi(auto_set=True)
             wxp.split_inactive_active_orbitals(active_indices)
             xmi_path = Path(f"{self.xmi_name}.xmi")
@@ -1394,17 +1431,27 @@ class autoVBMain:
         xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {filename}.xmi 1> {filename}.xmo  2> {filename}.err"
         self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {filename}.xmi.", f"XMVB execution failed for {filename}.xmi, check {filename}.xmo for details.")
 
-    def draw_xmo(self, xmo_file: Path, weight_table: str = 'cc', max_str: int = 20):
+    def draw_xmo(self, parsed_data: 'XmoParsedData', weight_table: str = 'cc', max_str: int = 20):
+        '''
+        使用XMVB的输出文件（.xmo）来绘制价键结构，核心步骤包括：
+        1. 解析.xmo文件，提取分子结构、活性空间信息、以及每个价键结构的权重。
+        2. 根据提取的信息，使用MoleculeBondVariantDrawer类来绘制
+        3. 将绘制的结果保存到当前目录，并记录输出文件的信息。
+        Args:
+            parsed_data ('XmoParsedData'): 从.xmo文件解析得到的数据对象，包含分子结构、活性空间信息、以及每个价键结构的权重等。
+            weight_table (str): 权重表的选择，默认为'cc'，可以是 'lowdin', 'inverse', 'renormalized'等。
+            max_str (int): 最大绘制的价键结构数量，默认为20。
+        Returns:
+            None
+        '''
         from .draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
         from .draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
-        from .io.xmo_output_parser import XmoParser
 
         WEIGHT = weight_table
         MAX_STR = max_str
         output_dir = Path.cwd()
         hide_hydrogens = True
 
-        parsed_data = XmoParser(xmo_file).parse()
         converter = XmoToDrawerInputConverter(
             parsed_data,
             output_dir,
@@ -1442,17 +1489,71 @@ class autoVBMain:
         for out_file in result.written_files:
             logger.info(f" - {out_file.name}")
 
-    def parser_xmo(self, xmo_file: Path):
+    def parser_xmo(self, xmo_file: Path) -> 'XmoParsedData':
+        '''
+        解析XMVB输出文件，提取相关信息。
+        Args:
+            xmo_file (Path): XMVB输出文件的路径，通常是.xmo文件。
+        Returns:
+            parsed_data (XmoParsedData): 解析后的数据对象。
+        '''
         from .io.xmo_output_parser import XmoParser
-        parsed_data = XmoParser(xmo_file).parse()
-        return parsed_data
+        logger.info(f"Parsing XMVB output file {xmo_file} to extract information...")
+        self.parsed_data = XmoParser(xmo_file).parse()
+        method = self.input_data.method.upper()
+        
+        logger.info(
+            f"Successfully! {method} converged in "
+            f"{self.parsed_data.steps} iterations"
+            f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
+        )
+        self._log_xmo_energy_summary(self.parsed_data)
+        return self.parsed_data
+
+    def _log_xmo_energy_summary(self, parsed_data: 'XmoParsedData') -> None:
+        '''
+        记录XMVB能量摘要信息，根据不同的方法（VBPT2, LAM-DFVB等）记录不同的能量项。
+        Args:
+            parsed_data ('XmoParsedData'): 从.xmo文件解析得到的数据对象，包含能量信息等。
+        Returns:
+            None
+        '''
+        method = self.input_data.method.upper()
+        energy_labels = {
+            "vbscf_energy": "VBSCF Energy",
+            "total_energy": "Total Energy",
+            "correlation_energy": "Correlation Energy",
+            "lam_dfvb_energy": "LAM-DFVB Energy",
+            "dfvb_correlation_energy": "DFVB Correlation Energy",
+            "lambda_parameter": "LAMBDA Parameter",
+        }
+        method_energy_keys = {
+            "VBPT2": (
+                "vbscf_energy",
+                "correlation_energy",
+            ),
+            "LAM-DFVB": (
+                "vbscf_energy",
+                "dfvb_correlation_energy",
+                "lambda_parameter",
+            ),
+        }
+
+        logger.info(f"E({method.upper()}) = {parsed_data.energy:.8f} a.u.")
+
+        for key in method_energy_keys[method]:
+            if key not in parsed_data.energy_terms:
+                continue
+            value = parsed_data.energy_terms[key]
+            unit = "" if key == "lambda_parameter" else " a.u."
+            logger.info(f"{energy_labels[key]} = {value:.8f}{unit}")
 
     def timed_call(self, step_name: str, func, *args, **kwargs):
         step_start = datetime.datetime.now()
-        logger.info(f"Start: {step_name} @ {step_start.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.debug(f"Start: {step_name} @ {step_start.strftime('%Y-%m-%d %H:%M:%S')}")
         result = func(*args, **kwargs)
         step_elapsed = (datetime.datetime.now() - step_start).total_seconds()
-        logger.info(f"End:   {step_name} | elapsed = {step_elapsed:.2f} s \n")
+        logger.debug(f"End:   {step_name} | elapsed = {step_elapsed:.2f} s \n")
         return result
 
     def main(self):
@@ -1471,6 +1572,7 @@ class autoVBMain:
         # 生成 .xmi 文件
         log_subroutine("Entry NBO to XMI Conversion")
         self.timed_call("generate_nbo_to_xmi", self.generate_nbo_to_xmi)
+        xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
 
         # VB计算是可选的，如果novb设置为True，则跳过VB计算步骤，仅生成 .xmi 文件
         if self.input_data.vbsettings.novb:
@@ -1478,21 +1580,19 @@ class autoVBMain:
         else:
             log_subroutine("Entry XMVB Calculation")
             self.timed_call("run_xmvb", self.run_xmvb)
-            xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
             self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
 
         # draw_xmo 调用
         if self.input_data.vbsettings.draw_xmo:
             log_subroutine("Entry draw_xmo")
-            if self.input_data.method.lower() == 'blw':
-                filename = self.blw_name
-            else:
-                filename = self.xmi_name
-            xmo_path = Path(f"{filename}.xmo")
-            if not xmo_path.exists():
-                logger.warning(f"XMVB output file {xmo_path} not found, cannot draw XMO. Make sure XMVB calculation completed successfully.")
-            else:
-                self.timed_call("draw_xmo", self.draw_xmo, xmo_path, 'cc')
+            # novb模式下没有生成xmo文件，因此需要先解析xmo文件，如果没有解析到数据则跳过绘制步骤
+            if not hasattr(self, 'parsed_data'):
+                try:
+                    self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
+                except Exception as e:
+                    logger.warning("No parsed .xmo data available for drawing. Skipping draw_xmo step.")
+                    logger.warning("If you want to draw the .xmo, you can use command line tool 'draw_xmo' with the generated .xmo file after running XMVB.")
+            self.timed_call("draw_xmo", self.draw_xmo, self.parsed_data, 'cc')
 
         workflow_elapsed = (datetime.datetime.now() - workflow_start).total_seconds()
 

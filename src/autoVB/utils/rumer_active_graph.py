@@ -315,6 +315,7 @@ def prepare_molecule_topology(
     try:
         rdDetermineBonds.DetermineBonds(mol, charge=charge)
     except Exception as exc:
+        raise
         raise ValueError(
             f"RDKit 无法从 {source_name} 推断键连；请检查 charge={charge} 是否正确。"
         ) from exc

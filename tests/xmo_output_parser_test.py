@@ -1,3 +1,5 @@
+import logging
+
 from autoVB.io.xmo_output_parser import XmoParser
 
 
@@ -7,10 +9,10 @@ def write_xmo(tmp_path, text: str):
     return xmo_path
 
 
-def minimal_xmo(weight_tables: str) -> str:
+def minimal_xmo(weight_tables: str, method: str = "vbscf") -> str:
     return f"""
 $ctrl
-vbscf
+{method}
 nae=2
 nao=2
 basis=cc-pVDZ
@@ -70,6 +72,10 @@ Renormalized Weights
         {"begin": 1, "end": 2}
     ]
     assert parsed.to_dict()["cc_weights"][0]["flat_orbitals"] == [1, 2]
+    assert parsed.convergence_steps is None
+    assert parsed.convergence_energy is None
+    assert parsed.energy_terms == {}
+    assert parsed.convergence_process == []
 
 
 def test_xmo_parser_maps_structure_orbitals_to_orb_atoms(tmp_path):
@@ -251,7 +257,121 @@ $end
     assert parsed.orbital_to_atom == {2: 4, 3: 5}
 
 
-def test_xmo_parser_warns_when_optional_weight_tables_are_missing(tmp_path, capsys):
+def test_xmo_parser_reads_convergence_information(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        minimal_xmo(
+            """
+                ITER           ENERGY               DE              GNORM              TIME
+                  0         -1.0000000000     -1.0000000000      0.5000000000      0.1000000000
+                  1         -1.1000000000     -0.1000000000      0.0500000000      0.2000000000
+
+                        VBSCF converged in     1 iterations
+
+                  Total Energy:     -1.10000000
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 1-2
+"""
+        ),
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+
+    assert parsed.convergence_steps == 1
+    assert parsed.convergence_energy == -1.1
+    assert parsed.steps == 1
+    assert parsed.energy == -1.1
+    assert parsed.energy_terms == {"total_energy": -1.1}
+    assert parsed.convergence_process == [
+        {
+            "iter": 0,
+            "energy": -1.0,
+            "de": -1.0,
+            "gnorm": 0.5,
+            "time": 0.1,
+        },
+        {
+            "iter": 1,
+            "energy": -1.1,
+            "de": -0.1,
+            "gnorm": 0.05,
+            "time": 0.2,
+        },
+    ]
+    assert parsed.to_dict()["convergence_steps"] == 1
+    assert parsed.to_dict()["energy_terms"] == {"total_energy": -1.1}
+    assert parsed.to_dict()["convergence_process"][1]["time"] == 0.2
+
+
+def test_xmo_parser_reads_vbpt2_energy_terms(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        minimal_xmo(
+            """
+                        VBSCF converged in     8 iterations
+
+                  VBSCF Energy:    -91.70749498
+                  Total Energy:    -91.98406517
+            Correlation Energy:     -0.27657019
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 1-2
+""",
+            method="vbpt2",
+        ),
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+
+    assert parsed.method == "vbpt2"
+    assert parsed.convergence_steps == 8
+    assert parsed.energy == -91.98406517
+    assert parsed.energy_terms == {
+        "vbscf_energy": -91.70749498,
+        "total_energy": -91.98406517,
+        "correlation_energy": -0.27657019,
+    }
+
+
+def test_xmo_parser_reads_lam_dfvb_energy_terms(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        minimal_xmo(
+            """
+                        VBSCF converged in    10 iterations
+
+                  VBSCF Energy:    -91.70749495
+               LAM-DFVB Energy:    -92.10518498
+       DFVB Correlation Energy:     -0.39769003
+              LAMBDA Parameter:      0.84474553
+
+                 ******  OVERLAP OF VB STRUCTURES  ******
+
+                 ******    VIRIAL THEOREM ANALYSIS    ******
+                      TOTAL ENERGY :        -91.707494950868
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 1-2
+""",
+            method="lam-dfvb=blyp",
+        ),
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+
+    assert parsed.method == "lam-dfvb=blyp"
+    assert parsed.convergence_steps == 10
+    assert parsed.energy == -92.10518498
+    assert parsed.energy_terms == {
+        "vbscf_energy": -91.70749495,
+        "lam_dfvb_energy": -92.10518498,
+        "dfvb_correlation_energy": -0.39769003,
+        "lambda_parameter": 0.84474553,
+    }
+
+
+def test_xmo_parser_warns_when_optional_weight_tables_are_missing(tmp_path, caplog):
     xmo_path = write_xmo(
         tmp_path,
         minimal_xmo(
@@ -261,14 +381,14 @@ def test_xmo_parser_warns_when_optional_weight_tables_are_missing(tmp_path, caps
 """
         ),
     )
+    caplog.set_level(logging.WARNING)
 
     parsed = XmoParser(xmo_path).parse()
-    captured = capsys.readouterr()
 
     assert parsed.cc_weights
     assert parsed.lowdin_weights == []
     assert parsed.inverse_weights == []
     assert parsed.renormalized_weights == []
-    assert "Lowdin Weights" in captured.out
-    assert "Inverse Weights" in captured.out
-    assert "Renormalized Weights" in captured.out
+    assert "Lowdin Weights" in caplog.text
+    assert "Inverse Weights" in caplog.text
+    assert "Renormalized Weights" in caplog.text
