@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Sequence
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rdkit import Chem
@@ -22,11 +22,14 @@ class ValenceBondStructureInfo:
         bond_pairs: 成键电子配对。该列表用于键升阶与电荷计算；
             例如 `[(1, 2)]` 表示一对电子分布在 1-2 之间。
             自配对 `[(1, 1)]` 表示一对电子都分布在 1 号原子上。
+        unpaired_atoms: 未成对电子所在的原子编号。每个编号表示一个单电子，
+            绘图时显示为一个红色点。
     """
 
     file_suffix: str
     legend: str
     bond_pairs: list[tuple[int, int]]
+    unpaired_atoms: list[int] = field(default_factory=list)
 
 
 class MoleculeBondVariantDrawer:
@@ -67,12 +70,14 @@ class MoleculeBondVariantDrawer:
     DEFAULT_ATOM_LABEL_FONT_SIZE = 12.0
     DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 22.0
     DEFAULT_LONE_PAIR_DOT_RADIUS = 3.4
+    DEFAULT_RADICAL_DOT_RADIUS = 4.0
     ATOM_LABEL_OFFSET = 13.0
     CHARGE_LABEL_OFFSET = 34.0
     LONE_PAIR_OFFSET = 23.0
     LONE_PAIR_DOT_GAP = 9.0
     CHARGE_NOTE_PROP = "_bondVariantChargeNote"
     LONE_PAIR_COUNT_PROP = "_bondVariantLonePairCount"
+    RADICAL_COUNT_PROP = "_bondVariantRadicalCount"
 
     @dataclass
     class Result:
@@ -216,6 +221,7 @@ class MoleculeBondVariantDrawer:
             file_suffix=structure.file_suffix,
             legend=structure.legend,
             bond_pairs=list(structure.bond_pairs),
+            unpaired_atoms=list(structure.unpaired_atoms),
         )
 
     def draw(self) -> MoleculeBondVariantDrawer.Result:
@@ -297,11 +303,26 @@ class MoleculeBondVariantDrawer:
 
         try:
             rdDetermineBonds.DetermineBonds(mol, charge=self.charge)
-        except Exception as exc:
-            raise ValueError(
-                f"Bond perception failed for {self.xyz_file.name}. "
-                f"Try a different charge value."
-            ) from exc
+        except Exception as first_exc:
+            try:
+                # 自由基体系常因形式电荷/价态分配失败；改用 radical 标记后
+                # 通常仍能得到可用于绘图的键级。
+                rdDetermineBonds.DetermineBonds(
+                    mol,
+                    charge=self.charge,
+                    allowChargedFragments=False,
+                )
+            except Exception:
+                try:
+                    # 价键结构绘图至少需要连接拓扑；若键级无法可靠推断，
+                    # 退回到只根据坐标推断连接关系。
+                    rdDetermineBonds.DetermineConnectivity(mol, charge=self.charge)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Bond perception failed for {self.xyz_file.name}. "
+                        f"Try a different charge value. First RDKit error: "
+                        f"{first_exc}"
+                    ) from exc
 
         visible_mol = (
             Chem.RemoveHs(mol, sanitize=False)
@@ -345,6 +366,11 @@ class MoleculeBondVariantDrawer:
             valence_bond_structure.bond_pairs,
             f"{structure_name}.bond_pairs",
         )
+        self._validate_atom_numbers(
+            base_mol,
+            valence_bond_structure.unpaired_atoms,
+            f"{structure_name}.unpaired_atoms",
+        )
 
         editable_mol = Chem.RWMol(base_mol)
         for atom in editable_mol.GetAtoms():
@@ -383,6 +409,10 @@ class MoleculeBondVariantDrawer:
                 valence_bond_structure,
                 charge_notes,
             ),
+        )
+        self._apply_radical_count_props(
+            mol,
+            self._radical_counts_from_valence_structure(valence_bond_structure),
         )
         mol.UpdatePropertyCache(strict=False)
         return mol, upgraded_bond_counts
@@ -502,6 +532,7 @@ class MoleculeBondVariantDrawer:
             atom_coords,
             self._charge_notes_from_mol(mol),
             self._lone_pair_counts_from_mol(mol),
+            self._radical_counts_from_mol(mol),
             width,
             height,
         )
@@ -532,6 +563,7 @@ class MoleculeBondVariantDrawer:
         atom_coords: list[tuple[float, float]],
         charge_notes: dict[int, str],
         lone_pair_counts: dict[int, int],
+        radical_counts: dict[int, int],
         width: int,
         height: int,
     ) -> str:
@@ -542,6 +574,7 @@ class MoleculeBondVariantDrawer:
             atom_coords: 原子的 SVG 坐标。
             charge_notes: 原子索引到电荷符号的映射。
             lone_pair_counts: 原子索引到孤对电子对数的映射。
+            radical_counts: 原子索引到未成对电子数的映射。
             width: SVG 宽度。
             height: SVG 高度。
 
@@ -562,6 +595,18 @@ class MoleculeBondVariantDrawer:
                     height,
                 )
             )
+
+        annotation_parts.extend(
+            self._svg_radical_dots(
+                atom_coords,
+                centroid,
+                charge_notes,
+                lone_pair_counts,
+                radical_counts,
+                width,
+                height,
+            )
+        )
 
         if self.show_atom_labels:
             for atom_idx, atom_coord in enumerate(atom_coords):
@@ -755,6 +800,102 @@ class MoleculeBondVariantDrawer:
             )
 
         return dots
+
+    def _svg_radical_dots(
+        self,
+        atom_coords: list[tuple[float, float]],
+        centroid: tuple[float, float],
+        charge_notes: dict[int, str],
+        lone_pair_counts: dict[int, int],
+        radical_counts: dict[int, int],
+        width: int,
+        height: int,
+    ) -> list[str]:
+        """生成未成对电子红点的 SVG 片段。"""
+        dot_parts: list[str] = []
+        for atom_idx, radical_count in radical_counts.items():
+            if atom_idx < 0 or atom_idx >= len(atom_coords):
+                continue
+            atom_coord = atom_coords[atom_idx]
+            for radical_idx, angle in enumerate(
+                self._radical_angles(
+                    atom_coord,
+                    centroid,
+                    radical_count,
+                    lone_pair_counts.get(atom_idx, 0),
+                )
+            ):
+                dot_parts.append(
+                    self._svg_radical_dot(
+                        atom_idx,
+                        radical_idx,
+                        atom_coord,
+                        angle,
+                        -self.LONE_PAIR_OFFSET
+                        if atom_idx in charge_notes
+                        else self.LONE_PAIR_OFFSET,
+                        width,
+                        height,
+                    )
+                )
+        return dot_parts
+
+    @staticmethod
+    def _radical_angles(
+        atom_coord: tuple[float, float],
+        centroid: tuple[float, float],
+        radical_count: int,
+        lone_pair_count: int,
+    ) -> list[float]:
+        """计算未成对电子相对原子的绘制角度。"""
+        x_delta = atom_coord[0] - centroid[0]
+        y_delta = atom_coord[1] - centroid[1]
+        if x_delta == 0 and y_delta == 0:
+            base_angle = -math.pi / 4.0
+        else:
+            base_angle = math.atan2(y_delta, x_delta)
+
+        if lone_pair_count:
+            base_angle += math.radians(52.0)
+        if radical_count <= 1:
+            return [base_angle]
+
+        angle_step = math.radians(30.0)
+        middle = (radical_count - 1) / 2.0
+        return [
+            base_angle + (radical_idx - middle) * angle_step
+            for radical_idx in range(radical_count)
+        ]
+
+    def _svg_radical_dot(
+        self,
+        atom_idx: int,
+        radical_idx: int,
+        atom_coord: tuple[float, float],
+        angle: float,
+        distance: float,
+        width: int,
+        height: int,
+    ) -> str:
+        """生成一个未成对电子红点的 SVG circle。"""
+        x_pos = atom_coord[0] + math.cos(angle) * distance
+        y_pos = atom_coord[1] + math.sin(angle) * distance
+        x_pos = self._clamp(
+            x_pos,
+            self.DEFAULT_RADICAL_DOT_RADIUS,
+            width - self.DEFAULT_RADICAL_DOT_RADIUS,
+        )
+        y_pos = self._clamp(
+            y_pos,
+            self.DEFAULT_RADICAL_DOT_RADIUS,
+            height - self.DEFAULT_RADICAL_DOT_RADIUS,
+        )
+        return (
+            f"<circle class='radical-dot atom-{atom_idx} radical-{radical_idx}' "
+            f"cx='{x_pos:.1f}' cy='{y_pos:.1f}' "
+            f"r='{self.DEFAULT_RADICAL_DOT_RADIUS:.1f}' "
+            f"fill='{self.active_space_color}' stroke='none'/>\n"
+        )
 
     @staticmethod
     def _point_centroid(points: list[tuple[float, float]]) -> tuple[float, float]:
@@ -1308,6 +1449,17 @@ class MoleculeBondVariantDrawer:
             lone_pair_counts[atom_idx] = lone_pair_counts.get(atom_idx, 0) + 1
         return lone_pair_counts
 
+    @staticmethod
+    def _radical_counts_from_valence_structure(
+        valence_bond_structure: ValenceBondStructureInfo,
+    ) -> dict[int, int]:
+        """统计当前结构中每个原子上的未成对电子数量。"""
+        radical_counts: dict[int, int] = {}
+        for atom_number in valence_bond_structure.unpaired_atoms:
+            atom_idx = atom_number - 1
+            radical_counts[atom_idx] = radical_counts.get(atom_idx, 0) + 1
+        return radical_counts
+
     def _expected_electron_counts(self) -> dict[int, int]:
         """计算原始电子分布。
 
@@ -1383,6 +1535,22 @@ class MoleculeBondVariantDrawer:
                     str(lone_pair_counts[atom_idx]),
                 )
 
+    def _apply_radical_count_props(
+        self,
+        mol: Chem.Mol,
+        radical_counts: dict[int, int],
+    ) -> None:
+        """把当前价键结构要显示的未成对电子数量暂存到原子属性里。"""
+        for atom in mol.GetAtoms():
+            atom_idx = atom.GetIdx()
+            if atom.HasProp(self.RADICAL_COUNT_PROP):
+                atom.ClearProp(self.RADICAL_COUNT_PROP)
+            if atom_idx in radical_counts:
+                atom.SetProp(
+                    self.RADICAL_COUNT_PROP,
+                    str(radical_counts[atom_idx]),
+                )
+
     def _charge_notes_from_mol(self, mol: Chem.Mol) -> dict[int, str]:
         """从分子原子属性中取出电荷标签。
 
@@ -1414,6 +1582,16 @@ class MoleculeBondVariantDrawer:
                     atom.GetProp(self.LONE_PAIR_COUNT_PROP)
                 )
         return lone_pair_counts
+
+    def _radical_counts_from_mol(self, mol: Chem.Mol) -> dict[int, int]:
+        """从分子原子属性中取出未成对电子显示数量。"""
+        radical_counts: dict[int, int] = {}
+        for atom in mol.GetAtoms():
+            if atom.HasProp(self.RADICAL_COUNT_PROP):
+                radical_counts[atom.GetIdx()] = int(
+                    atom.GetProp(self.RADICAL_COUNT_PROP)
+                )
+        return radical_counts
 
     def _color_upgraded_bond_lines_in_svg(
         self,
