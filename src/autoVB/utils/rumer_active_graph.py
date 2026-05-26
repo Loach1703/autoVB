@@ -313,12 +313,10 @@ def prepare_molecule_topology(
 ) -> Chem.Mol:
     """推断键连、按需隐藏氢，并返回后续排序使用的可见分子。"""
     try:
-        rdDetermineBonds.DetermineBonds(mol, charge=charge)
+        # rdDetermineBonds.DetermineBonds(mol, charge=charge)
+        rdDetermineBonds.DetermineConnectivity(mol, charge=charge)
     except Exception as exc:
         raise
-        raise ValueError(
-            f"RDKit 无法从 {source_name} 推断键连；请检查 charge={charge} 是否正确。"
-        ) from exc
 
     visible_mol = (
         Chem.RemoveHs(mol, sanitize=False)

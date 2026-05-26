@@ -394,6 +394,7 @@ class NBOOrbital:
     raw_text: str
     orbital_vector: np.ndarray = field(default_factory=lambda: np.array([]))
     contributions: List[NBOContribution] = field(default_factory=list)
+    spin: str = ""
 
     def __str__(self):
         return f"Orbital {self.index}: {self.orbital_type}({self.orbital_number}) Atom(s): {self.atoms} Occupancy: {self.occupancy}\n"
@@ -444,24 +445,35 @@ class GaussianNBOParser:
         r"^\s*[-+]?(?:\d+\.\d*|\.\d+)(?:[Ee][-+]?\d+)?"
         r"(?:\s+[-+]?(?:\d+\.\d*|\.\d+)(?:[Ee][-+]?\d+)?)+\s*$"
     )
+    # 开壳层 NBO 分析段落标记，例如：NATURAL BOND ORBITAL ANALYSIS, alpha spin orbitals
+    _SPIN_ANALYSIS_RE = re.compile(
+        r"NATURAL BOND ORBITAL ANALYSIS,\s*(?P<spin>alpha|beta)\s+spin orbitals",
+        re.IGNORECASE,
+    )
+    # .37 文件中自旋块标记，例如：ALPHA SPIN
+    _SPIN_MATRIX_RE = re.compile(r"^\s*(?P<spin>ALPHA|BETA)\s+SPIN\s*$", re.IGNORECASE)
     _END_TOKENS = (
         "NHO Directionality",
         "Second Order Perturbation Theory Analysis",
         "Natural Bond Orbitals (Summary):",
     )
 
-    def __init__(self, nbo_output_path: Path, nbo_orb_path: Path, mol: 'gto.Mole', debug: bool = False):
+    def __init__(self, nbo_output_path: Path, nbo_orb_path: Path, mol: 'gto.Mole', debug: bool = False, spin: str = "alpha"):
         self.nbo_output_path = nbo_output_path
         self.nbo_orb_path = nbo_orb_path
         self.mol = mol
         self.debug = debug
+        self.spin = spin.strip().lower()
         self.basis_function_number = self.mol.nao_nr()
-        self.nbo_data = self.parse_out()
+        if self.mol.spin > 0:
+            logger.info(
+                f"Detected open-shell system with spin={self.mol.spin}; "
+                f"using {self.spin} NBO spin block."
+            )
+        self.nbo_data = self.parse_out(spin=self.spin)
         self.parse_out_by_pyssian()
-        self.origin_nbo_orbital_matrix = self.parse_nbo_orbital()
-        self.nbo_orbital_matrix: np.ndarray = self.origin_nbo_orbital_matrix[:-1]
-        self.occupation_numbers: np.ndarray = self.origin_nbo_orbital_matrix[-1]
-        self.pnbo_orbital_matrix = self.parse_pnbo_orbital()
+        self.nbo_orbital_matrix, self.occupation_numbers = self.parse_nbo_orbital(spin=self.spin)
+        self.pnbo_orbital_matrix = self.parse_pnbo_orbital(spin=self.spin)
 
         # 填充nbo_data中的 orbital_vector
         for orbital in self.nbo_data:
@@ -471,9 +483,11 @@ class GaussianNBOParser:
         # 获得每种轨道类型对应的dict，键为轨道类型字符串，值为该类型轨道的列表
         self.orbitals_by_type: Dict[str, List[int]] = {}
         self.orbitals_type_list: List[str] = []
+        # 构造按轨道分类的索引列表和类型列表
         for orbital in self.nbo_data:
             self.orbitals_by_type.setdefault(orbital.orbital_type, []).append(orbital.index)
             self.orbitals_type_list.append(orbital.orbital_type)
+        # 构建成键-反键配对关系
         self.bond_antibond_pairs = self.build_bond_antibond_pairs()
         self.bond_antibond_pair_by_bond_index = {
             pair.bond.index: pair for pair in self.bond_antibond_pairs
@@ -481,10 +495,13 @@ class GaussianNBOParser:
         self.bond_antibond_pair_by_antibond_index = {
             pair.antibond.index: pair for pair in self.bond_antibond_pairs
         }
+        # 根据成键-反键配对关系修正占据数，构建修正后的占据数列表
         self.rectified_occupancy = self.build_rectified_occupancy()
         if self.debug:
             logger.debug(f"orbital_atoms: {self.orbital_atoms}")
             logger.debug("Finished parsing NBO output. Summary of parsed data:")
+            if self.mol.spin > 0:
+                logger.debug(f"Spin: {self.spin}")
             logger.debug(self.nbo_data)
             logger.debug("Bond-Antibond pair(s):")
             logger.debug(self.bond_antibond_pairs)
@@ -553,26 +570,82 @@ class GaussianNBOParser:
         """
         return (orbital.orbital_number, tuple(sorted(orbital.connection)))
 
-    def read_bond_orbital_blocks(self) -> List[str]:
+    def _spin_analysis_bounds(
+        self,
+        lines: List[str],
+        spin: str,
+    ) -> tuple[int, int] | None:
+        """
+        返回指定 alpha/beta NBO 分析段的行范围；闭壳层返回 None。
+
+        Args:
+            lines: NBO 输出文件的全部文本行。
+            spin: 用户指定的自旋块名称，通常为 alpha 或 beta。
+
+        Returns:
+            tuple[int, int] | None: 开壳层时返回目标分析段的起止行号，
+            闭壳层文件没有 alpha/beta 标记时返回 None。
+        """
+        # 目标自旋
+        target_spin = spin.strip().lower()
+        spin_sections: List[tuple[int, str]] = []
+        for index, line in enumerate(lines):
+            match = self._SPIN_ANALYSIS_RE.search(line)
+            if match:
+                spin_sections.append((index, match.group("spin").lower()))
+
+        if not spin_sections:
+            return None
+
+        # 开壳层文件中 alpha/beta 各有一个 NBO 分析段，只截取用户指定的那一段。
+        for section_index, (start_index, section_spin) in enumerate(spin_sections):
+            if section_spin != target_spin:
+                continue
+            if section_index + 1 < len(spin_sections):
+                return start_index, spin_sections[section_index + 1][0]
+            return start_index, len(lines)
+
+        available_spins = ", ".join(sorted({section_spin for _, section_spin in spin_sections}))
+        raise ValueError(
+            f"Cannot find {target_spin} NBO analysis section in "
+            f"{self.nbo_output_path}. Available spin sections: {available_spins}."
+        )
+
+    def read_bond_orbital_blocks(self, spin: str = "alpha") -> List[str]:
         """
         读取 Gaussian NBO 输出文件中 Bond orbital 段落，按每个轨道块切分。
-        返回值示例为用户期望的字符串列表。
+
+        Args:
+            spin: 开壳层 NBO 输出中要读取的自旋块，通常为 alpha 或 beta。
+
+        Returns:
+            List[str]: 每个元素是一个完整 NBO 轨道文本块。
         """
         lines = self.nbo_output_path.read_text(errors='ignore').splitlines()
+        bounds = self._spin_analysis_bounds(lines, spin)
+        search_start = 0
+        search_end = len(lines)
+        if bounds is not None:
+            search_start, search_end = bounds
 
         section_start = None
-        for i, line in enumerate(lines):
+        for i in range(search_start, search_end):
+            line = lines[i]
             if self._SECTION_HEADER_RE.search(line):
                 section_start = i
                 break
 
         if section_start is None:
-            raise ValueError(f"Failed to find NBO Bond orbital section in file: {self.nbo_output_path}")
+            spin_text = f" for {spin.strip().lower()} spin" if bounds is not None else ""
+            raise ValueError(
+                f"Failed to find NBO Bond orbital section{spin_text} "
+                f"in file: {self.nbo_output_path}"
+            )
 
         blocks: List[str] = []
         current_block: List[str] = []
 
-        for line in lines[section_start + 1:]:
+        for line in lines[section_start + 1: search_end]:
             stripped = line.strip()
             if any(stripped.startswith(tok) for tok in self._END_TOKENS):
                 break
@@ -664,14 +737,22 @@ class GaussianNBOParser:
 
         return parsed
 
-    def parse_out(self) -> List[NBOOrbital]:
+    def parse_out(self, spin: str = "alpha") -> List[NBOOrbital]:
         """
         解析整个 out 文件，返回结构化 NBO 轨道块数据。
+
+        Args:
+            spin: 开壳层 NBO 输出中要读取的自旋块，通常为 alpha 或 beta。
+
         Returns:
-            list (List[NBOOrbital]): 解析得到的 NBO 轨道块列表，每个元素包含轨道类型、占据数、连接原子等信息。
+            List[NBOOrbital]: 解析得到的 NBO 轨道块列表，每个元素包含
+            轨道类型、占据数、连接原子等信息。
         """
-        blocks = self.read_bond_orbital_blocks()
+        normalized_spin = spin.strip().lower()
+        blocks = self.read_bond_orbital_blocks(spin=normalized_spin)
         nbo_data = [self.parse_bond_orbital_block(block) for block in blocks]
+        for orbital in nbo_data:
+            orbital.spin = normalized_spin
         return nbo_data
 
     def parse_out_by_pyssian(self):
@@ -741,68 +822,135 @@ class GaussianNBOParser:
 
         return rectified_occupancy
 
-    def parse_nbo_orbital(self) -> np.ndarray:
+    def _spin_matrix_bounds(
+        self,
+        lines: List[str],
+        spin: str,
+    ) -> tuple[int, int]:
+        """
+        获得 .36/.37 文件中指定 spin 数值矩阵的行范围。
+
+        Args:
+            lines: .36 或 .37 文件的全部文本行。
+            spin: 用户指定的自旋块名称，通常为 alpha 或 beta。
+
+        Returns:
+            tuple[int, int]: 目标数值矩阵块的起止行号。闭壳层文件没有
+            `ALPHA SPIN` / `BETA SPIN` 标记时，返回旧格式的默认数据范围。
+        """
+        target_spin = spin.strip().lower()
+        # 自旋块标记行，例如：ALPHA SPIN 或 BETA SPIN
+        spin_markers: List[tuple[int, str]] = []
+        for index, line in enumerate(lines):
+            match = self._SPIN_MATRIX_RE.match(line)
+            if match:
+                spin_markers.append((index, match.group("spin").lower()))
+
+        # 闭壳层
+        if not spin_markers:
+            return 3, len(lines)
+
+        # 开壳层 alpha 和 beta 矩阵分两个块
+        for marker_index, (start_index, marker_spin) in enumerate(spin_markers):
+            if marker_spin != target_spin:
+                continue
+            if marker_index + 1 < len(spin_markers):
+                return start_index + 1, spin_markers[marker_index + 1][0]
+            return start_index + 1, len(lines)
+
+        available_spins = ", ".join(sorted({marker_spin for _, marker_spin in spin_markers}))
+        raise ValueError(
+            f"Cannot find {target_spin} spin matrix section in "
+            f"{self.nbo_orb_path}. Available spin sections: {available_spins}."
+        )
+
+    def _read_orbital_matrix_file(
+        self,
+        orbital_path: Path,
+        row_count: int,
+        spin: str = "alpha",
+    ) -> np.ndarray:
+        """
+        读取 .36/.37 中的轨道矩阵，自动兼容闭壳层和 alpha/beta 分块。
+
+        Args:
+            orbital_path: .36 或 .37 文件路径。
+            row_count: 需要读取的矩阵行数；.37 为 basis+1，.36 为 basis。
+            spin: 开壳层文件中要读取的自旋块，通常为 alpha 或 beta。
+
+        Returns:
+            np.ndarray: 形状为 `(row_count, basis_functions)` 的轨道矩阵。
+        """
+        # 根据基函数计算期望的系数数量
+        basis_functions = self.basis_function_number
+        expected = row_count * basis_functions
+        lines = orbital_path.read_text(errors='ignore').splitlines()
+        start_index, end_index = self._spin_matrix_bounds(lines, spin)
+
+        data: List[float] = []
+        for line in lines[start_index:end_index]:
+            tokens = line.strip().split()
+            if not tokens:
+                continue
+
+            try:
+                row_values = [float(token) for token in tokens]
+            except ValueError:
+                # 跳过旧格式矩阵后的 NBO 类型、星号等元数据行。
+                continue
+
+            data.extend(row_values)
+            if len(data) >= expected:
+                break
+        
+        # 检查读取的系数数量是否符合预期，若超过则截断，若不足则发出警告
+        if len(data) != expected:
+            logger.warning(
+                f"Read {len(data)} coefficients in {orbital_path}, "
+                f"expected {row_count}*{basis_functions}={expected}."
+            )
+            if len(data) > expected:
+                data = data[:expected]
+
+        arr = np.array(data, dtype=float)
+        return arr.reshape((row_count, basis_functions))
+
+    def parse_nbo_orbital(self, spin: str = "alpha") -> tuple[np.ndarray, np.ndarray]:
         """
         读取并解析 NBO .37 文件中的轨道数据，返回二维系数矩阵。
+
+        Args:
+            spin: 开壳层 .37 文件中要读取的自旋块，通常为 alpha 或 beta。
+
         Returns:
-            array (np.ndarray): 形状为 (basis_functions + 1, basis_functions) 的二维数组，最后一行是占据数
+            orbtuple (tuple[np.ndarray, np.ndarray]): 一个包含两个数组的tuple：第一个是形状为 `(basis_functions, basis_functions)` 的轨道系数二维数组，第二个是占据数数组。
         """
         nbo_path = self.nbo_orb_path
         basis_functions = self.basis_function_number
-        headfile_path = nbo_path.with_suffix('.31')
-        text = nbo_path.read_text(errors='ignore')
-        lines = text.splitlines()
-        data = []
-        for line in lines[3:]:
-            # i==3开始
-            if '1  1' in line:
-                break
-            data_line = line.strip().split()
-            data.extend(data_line)
-        # 将一维数据转换为二维矩阵 (NAO, NAO)
-        # 假设 basis_functions 是 N，则读取的数据应该是 N*(N+1) 个
-        # 最后一行是占据数
-        arr = np.array(data, dtype=float)
-        
-        # 简单的完整性检查
-        expected = basis_functions * (basis_functions + 1)
-        if arr.size != expected:
-            logger.warning(f"Read {arr.size} coefficients in NBO file, expected {basis_functions+1}*{basis_functions}={expected}.")
-            # 如果读取过多，进行截断；如果过少，reshape会抛出异常
-            if arr.size > expected:
-                arr = arr[:expected]
-        
-        return arr.reshape((basis_functions + 1, basis_functions))
+        origin_nbo_orbital_matrix = self._read_orbital_matrix_file(
+            nbo_path,
+            row_count=basis_functions + 1,
+            spin=spin,
+        )
+        nbo_orbital_matrix = origin_nbo_orbital_matrix[:-1]
+        occupation_numbers = origin_nbo_orbital_matrix[-1]
+        return nbo_orbital_matrix, occupation_numbers
 
-    def parse_pnbo_orbital(self) -> np.ndarray:
+    def parse_pnbo_orbital(self, spin: str = "alpha") -> np.ndarray:
         """
         读取并解析 NBO .36 文件中的轨道数据（PNBO），返回二维系数矩阵。
+
+        Args:
+            spin: 开壳层 .36 文件中要读取的自旋块，通常为 alpha 或 beta。
+
         Returns:
-            array (np.ndarray): 形状为 (basis_functions , basis_functions) 的二维数组
+            np.ndarray: 形状为 `(basis_functions, basis_functions)` 的二维数组。
         """
         nbo_path = self.nbo_orb_path
         basis_functions = self.basis_function_number
         pnbo_path = nbo_path.with_suffix('.36')
-        text = pnbo_path.read_text(errors='ignore')
-        lines = text.splitlines()
-        data = []
-        for line in lines[3:]:
-            # i==3开始
-            if '1  1' in line:
-                break
-            data_line = line.strip().split()
-            data.extend(data_line)
-        # 将一维数据转换为二维矩阵 (NAO, NAO)
-        # 假设 basis_functions 是 N，则读取的数据应该是 N*N 个
-        # 最后一行是占据数
-        arr = np.array(data, dtype=float)
-        
-        # 简单的完整性检查
-        expected = basis_functions * basis_functions
-        if arr.size != expected:
-            logger.warning(f"Read {arr.size} coefficients in PNBO file, expected {basis_functions}*{basis_functions}={expected}.")
-            # 如果读取过多，进行截断；如果过少，reshape会抛出异常
-            if arr.size > expected:
-                arr = arr[:expected]
-        
-        return arr.reshape((basis_functions, basis_functions))
+        return self._read_orbital_matrix_file(
+            pnbo_path,
+            row_count=basis_functions,
+            spin=spin,
+        )

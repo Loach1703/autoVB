@@ -183,6 +183,99 @@ $end
     assert weight.flat_atoms == [2, 2, 3, 4, 6, 7, 5, 8, 9, 10]
 
 
+def test_xmo_parser_reads_doublet_structure_with_trailing_unpaired_electron(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        """
+$ctrl
+vbscf
+nae=3
+nao=3
+nmul=2
+basis=6-31g*
+$end
+
+$orb
+1*3
+1
+3
+5
+$end
+
+$geo
+C 0.0 0.0 0.0
+C 1.0 0.0 0.0
+C 2.0 0.0 0.0
+C 3.0 0.0 0.0
+C 4.0 0.0 0.0
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 2 3 1
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+    weight = parsed.cc_weights[0]
+
+    assert weight.orbital_connections == [(2, 3)]
+    assert weight.atom_connections == [(3, 5)]
+    assert weight.unpaired_orbitals == [1]
+    assert weight.unpaired_atoms == [1]
+    assert weight.flat_orbitals == [2, 3, 1]
+    assert weight.flat_atoms == [3, 5, 1]
+    assert weight.to_dict()["unpaired_orbitals"] == [1]
+    assert weight.to_dict()["unpaired_atoms"] == [1]
+
+
+def test_xmo_parser_reads_triplet_structure_with_two_trailing_unpaired_electrons(tmp_path):
+    orb_rows = "\n".join(str(i) for i in range(1, 11))
+    geo_rows = "\n".join(f"O {i}.0 0.0 0.0" for i in range(10))
+    xmo_path = write_xmo(
+        tmp_path,
+        f"""
+$ctrl
+vbscf
+nae=8
+nao=6
+nmul=3
+basis=cc-pVDZ
+$end
+
+$orb
+1*10
+{orb_rows}
+$end
+
+$geo
+{geo_rows}
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 1:4 7 7 10 10 5-6 8 9
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+    weight = parsed.cc_weights[0]
+
+    assert parsed.orbital_to_atom == {
+        5: 5,
+        6: 6,
+        7: 7,
+        8: 8,
+        9: 9,
+        10: 10,
+    }
+    assert weight.inactive_orbital_ranges == [(1, 4)]
+    assert weight.orbital_connections == [(7, 7), (10, 10), (5, 6)]
+    assert weight.atom_connections == [(7, 7), (10, 10), (5, 6)]
+    assert weight.unpaired_orbitals == [8, 9]
+    assert weight.unpaired_atoms == [8, 9]
+    assert weight.flat_orbitals == [7, 7, 10, 10, 5, 6, 8, 9]
+    assert weight.flat_atoms == [7, 7, 10, 10, 5, 6, 8, 9]
+
+
 def test_xmo_parser_reads_space_separated_ctrl_options(tmp_path):
     xmo_path = write_xmo(
         tmp_path,

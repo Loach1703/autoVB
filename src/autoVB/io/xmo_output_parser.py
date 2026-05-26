@@ -58,6 +58,8 @@ class XmoStructureWeight:
         inactive_orbital_ranges: 结构描述中的非活性/闭壳层轨道范围。
         orbital_connections: 结构描述中的活性轨道连接。
         atom_connections: 活性轨道按 `$orb` 映射后的原子连接。
+        unpaired_orbitals: 未成对电子占据的活性轨道编号。
+        unpaired_atoms: 未成对电子占据轨道映射到的原子编号。
         flat_orbitals: 展平后的活性轨道编号序列。
         flat_atoms: 展平后的原子编号序列。
     """
@@ -68,6 +70,8 @@ class XmoStructureWeight:
     inactive_orbital_ranges: list[Pair] = field(default_factory=list)
     orbital_connections: list[Pair] = field(default_factory=list)
     atom_connections: list[Pair] = field(default_factory=list)
+    unpaired_orbitals: list[int] = field(default_factory=list)
+    unpaired_atoms: list[int] = field(default_factory=list)
     flat_orbitals: list[int] = field(default_factory=list)
     flat_atoms: list[int] = field(default_factory=list)
 
@@ -86,6 +90,8 @@ class XmoStructureWeight:
             ),
             "orbital_connections": self._pair_dicts(self.orbital_connections),
             "atom_connections": self._pair_dicts(self.atom_connections),
+            "unpaired_orbitals": self.unpaired_orbitals,
+            "unpaired_atoms": self.unpaired_atoms,
             "flat_orbitals": self.flat_orbitals,
             "flat_atoms": self.flat_atoms,
         }
@@ -161,8 +167,8 @@ class XmoParsedData:
             "geo_text": self.geo_text,
             "steps": self.steps,
             "energy": self.energy,
-            "steps": self.steps,
-            "energy": self.energy,
+            "convergence_steps": self.convergence_steps,
+            "convergence_energy": self.convergence_energy,
             "energy_terms": self.energy_terms,
             "convergence_process": self.convergence_process,
             "cc_weights": [weight.to_dict() for weight in self.cc_weights],
@@ -172,6 +178,16 @@ class XmoParsedData:
                 weight.to_dict() for weight in self.renormalized_weights
             ],
         }
+
+    @property
+    def convergence_steps(self) -> int | None:
+        """兼容旧字段名，返回收敛迭代步数。"""
+        return self.steps
+
+    @property
+    def convergence_energy(self) -> float | None:
+        """兼容旧字段名，返回按方法选取的收敛能量。"""
+        return self.energy
 
     def save_geo_text(self, output_file: str | Path) -> None:
         """将 `$geo` 纯文本坐标写入文件。
@@ -247,6 +263,8 @@ class XmoParser:
         ctrl_options = self._parse_ctrl_options(ctrl_lines)
         method = self._parse_method(ctrl_lines)
         nao = self._parse_required_int(ctrl_lines, "nao")
+        multiplicity = self._parse_optional_int(ctrl_lines, "nmul", default=1)
+        unpaired_electron_count = max(0, multiplicity - 1)
         orb = self._parse_orb(orb_lines)
         orbital_to_atom = self._active_orbital_to_atom(orb, nao)
 
@@ -272,21 +290,25 @@ class XmoParser:
                 lines,
                 "WEIGHTS OF STRUCTURES",
                 orbital_to_atom,
+                unpaired_electron_count,
             ),
             lowdin_weights=self._parse_weight_table(
                 lines,
                 "Lowdin Weights",
                 orbital_to_atom,
+                unpaired_electron_count,
             ),
             inverse_weights=self._parse_weight_table(
                 lines,
                 "Inverse Weights",
                 orbital_to_atom,
+                unpaired_electron_count,
             ),
             renormalized_weights=self._parse_weight_table(
                 lines,
                 "Renormalized Weights",
                 orbital_to_atom,
+                unpaired_electron_count,
             ),
         )
 
@@ -351,6 +373,13 @@ class XmoParser:
                 return int(value)
 
         raise ValueError(f"Cannot find integer key {key!r} in $ctrl section.")
+
+    def _parse_optional_int(self, lines: list[str], key: str, default: int) -> int:
+        """从 `$ctrl` 行中读取可选整数参数，缺省时返回默认值。"""
+        for ctrl_key, value in self._iter_ctrl_items(lines):
+            if ctrl_key == key.lower() and value is not None:
+                return int(value)
+        return default
 
     def _parse_method(self, lines: list[str]) -> str:
         """从 `$ctrl` 中读取计算方法。
@@ -665,6 +694,7 @@ class XmoParser:
         lines: list[str],
         title: str,
         orbital_to_atom: dict[int, int],
+        unpaired_electron_count: int,
     ) -> list[XmoStructureWeight]:
         """解析指定标题下方的结构权重表。
 
@@ -689,12 +719,19 @@ class XmoParser:
             if match:
                 structure_name = match.group("structure").strip()
 
-                # 结构名先解析为轨道连接，再通过 `$orb` 映射成原子连接。
-                orbital_connections = self._parse_structure_orbital_connections(
-                    structure_name
+                # 结构名先解析为轨道连接和未成对电子，再通过 `$orb` 映射成原子信息。
+                orbital_connections, unpaired_orbitals = (
+                    self._parse_structure_orbital_connections(
+                        structure_name,
+                        unpaired_electron_count,
+                    )
                 )
                 atom_connections = self._map_orbital_connections(
                     orbital_connections,
+                    orbital_to_atom,
+                )
+                unpaired_atoms = self._map_orbitals(
+                    unpaired_orbitals,
                     orbital_to_atom,
                 )
                 weights.append(
@@ -707,8 +744,12 @@ class XmoParser:
                         ),
                         orbital_connections=orbital_connections,
                         atom_connections=atom_connections,
-                        flat_orbitals=self._flatten_pairs(orbital_connections),
-                        flat_atoms=self._flatten_pairs(atom_connections),
+                        unpaired_orbitals=unpaired_orbitals,
+                        unpaired_atoms=unpaired_atoms,
+                        flat_orbitals=self._flatten_pairs(orbital_connections)
+                        + unpaired_orbitals,
+                        flat_atoms=self._flatten_pairs(atom_connections)
+                        + unpaired_atoms,
                     )
                 )
                 continue
@@ -741,15 +782,39 @@ class XmoParser:
     def _parse_structure_orbital_connections(
         self,
         structure_name: str,
-    ) -> list[Pair]:
-        """解析结构名中的活性轨道连接。"""
+        unpaired_electron_count: int,
+    ) -> tuple[list[Pair], list[int]]:
+        """解析结构名中的活性电子对连接和末尾未成对电子。
+
+        XMVB 结构从左到右按电子对解释；对多重度为 a+1 的体系，最后
+        a 个单独数字表示未成对电子，不再参与前面的两两配对。
+        """
+        active_tokens = [
+            token
+            for token in structure_name.split()
+            if ":" not in token
+        ]
+        unpaired_orbitals: list[int] = []
+        if unpaired_electron_count:
+            if len(active_tokens) < unpaired_electron_count:
+                raise ValueError(
+                    f"Structure {structure_name!r} has fewer active tokens than "
+                    f"{unpaired_electron_count} unpaired electron(s)."
+                )
+            unpaired_tokens = active_tokens[-unpaired_electron_count:]
+            for token in unpaired_tokens:
+                if not token.isdigit():
+                    raise ValueError(
+                        f"Unpaired electron token must be an orbital number, "
+                        f"but got {token!r} in structure {structure_name!r}."
+                    )
+                unpaired_orbitals.append(int(token))
+            active_tokens = active_tokens[:-unpaired_electron_count]
+
         connections: list[Pair] = []
         pending_single_orbital: int | None = None
 
-        for token in structure_name.split():
-            if ":" in token:
-                # `1:30` 表示闭壳层/非活性轨道范围，不属于活性连接。
-                continue
+        for token in active_tokens:
             if "-" in token:
                 if pending_single_orbital is not None:
                     raise ValueError(
@@ -776,7 +841,7 @@ class XmoParser:
                 f"{structure_name!r}."
             )
 
-        return connections
+        return connections, unpaired_orbitals
 
     def _map_orbital_connections(
         self,
@@ -788,6 +853,14 @@ class XmoParser:
             (orbital_to_atom[begin], orbital_to_atom[end])
             for begin, end in orbital_connections
         ]
+
+    def _map_orbitals(
+        self,
+        orbitals: list[int],
+        orbital_to_atom: dict[int, int],
+    ) -> list[int]:
+        """把活性轨道编号列表映射为原子编号列表。"""
+        return [orbital_to_atom[orbital] for orbital in orbitals]
 
     @staticmethod
     def _flatten_pairs(pairs: list[Pair]) -> list[int]:

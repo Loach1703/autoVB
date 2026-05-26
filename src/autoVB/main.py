@@ -2,6 +2,7 @@ import subprocess
 import os
 import re
 import io
+import math
 import numpy as np
 import datetime
 from pathlib import Path
@@ -300,7 +301,7 @@ class XMVBNBO:
         内部方法，从NBO输出文件中读取轨道矩阵和占据数，存储在self.orbital_matrix和self.occupation_numbers中
         '''
         from .io.readers import GaussianNBOParser
-        self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug)
+        self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug, spin="alpha")
 
         if self.input_data.vbsettings.guess == 'pnbo':
             logger.info("Using PNBO orbitals as initial guess.")
@@ -308,6 +309,28 @@ class XMVBNBO:
         elif self.input_data.vbsettings.guess == 'nbo':
             logger.info("Using NBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.nbo_orbital_matrix
+
+        # 如果是开壳层系统，除了读取alpha轨道的占据数，还需要读取beta轨道的占据数，并将两者相加得到总的占据数，用于后续的活性空间选择
+        if self.mol.spin > 0:
+            logger.info("Detected open-shell system, parsing both alpha and beta NBO occupation numbers...")
+            logger.info("Using alpha + beta NBO occupation numbers for open-shell active space selection.")
+            self.nbo_parser_beta = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug, spin="beta")
+            # combined_occupation_numbers = self.nbo_parser.occupation_numbers * 2
+            # self.nbo_parser.occupation_numbers = combined_occupation_numbers
+            # for orbital, occupancy in zip(self.nbo_parser.nbo_data, combined_occupation_numbers):
+            #     orbital.occupancy = float(occupancy)
+            # self.nbo_parser.bond_antibond_pairs = self.nbo_parser.build_bond_antibond_pairs()
+            # self.nbo_parser.bond_antibond_pair_by_bond_index = {
+            #     pair.bond.index: pair for pair in self.nbo_parser.bond_antibond_pairs
+            # }
+            # self.nbo_parser.bond_antibond_pair_by_antibond_index = {
+            #     pair.antibond.index: pair for pair in self.nbo_parser.bond_antibond_pairs
+            # }
+            # self.occupation_numbers = self.nbo_parser.occupation_numbers * 2
+            # self.rectified_occupancy = self.nbo_parser.rectified_occupancy * 2
+
+        else:
+            logger.info("Detected closed-shell system.")
 
         self.occupation_numbers = self.nbo_parser.occupation_numbers
         self.rectified_occupancy = self.nbo_parser.rectified_occupancy
@@ -320,7 +343,8 @@ class XMVBNBO:
         内部方法，将轨道矩阵分为占据轨道和虚轨道，分别存储在self.occupation_orbital_matrix和self.virtual_orbital_matrix中，存储occ_indices和vir_indices用于后续切片，存储occ_orb_atom和vir_orb_atom用于后续分析
         '''
         total_elec = self.mol.nelectron
-        orb_number = int(total_elec / 2)
+        # 向上取整轨道数
+        orb_number = math.ceil(total_elec / 2)
         self.occupation_orbital_matrix = self.orbital_matrix[:orb_number]
         self.virtual_orbital_matrix = self.orbital_matrix[orb_number:]
         self.occ_orb_atom = self.orbital_atoms[:orb_number]
@@ -514,6 +538,15 @@ class XMVBNBO:
         threshold_bd_antibonding_min = 0.15
         threshold_lp = 1.96
         threshold_lp_min = 1.9
+        if self.mol.spin > 0:
+            threshold_bd_bonding = 0.98
+            threshold_bd_bonding_min = 0.95
+            threshold_bd_bonding_star = 0.995
+            threshold_bd_bonding_star_min = 0.95
+            threshold_bd_antibonding = 0.03
+            threshold_bd_antibonding_min = 0.075
+            threshold_lp = 0.98
+            threshold_lp_min = 0.95
         debug = self.input_data.debug
         nolp = self.input_data.vbsettings.nolp
 
@@ -562,11 +595,11 @@ class XMVBNBO:
                     add_orbital(selected_orbitals, pair.bond, reason)
                     rule_hits["BD-BD*"].append(pair.bond.index)
 
-            # 挑选满足 LP 轨道占据数小于 lp_threshold 的轨道
+            # 挑选满足 LP/LP* 轨道占据数小于 lp_threshold 的轨道
             if not nolp:
                 for orbital in self.nbo_parser.nbo_data:
-                    if orbital.orbital_type == "LP" and 0.0 < orbital.occupancy < lp_threshold:
-                        add_orbital(selected_orbitals, orbital, f"LP<{lp_threshold:.3f}")
+                    if orbital.orbital_type in ("LP", "LP*") and 0.0 < orbital.occupancy < lp_threshold:
+                        add_orbital(selected_orbitals, orbital, f"LP/LP*<{lp_threshold:.3f}")
                         rule_hits["LP"].append(orbital.index)
             else:
                 if debug:
@@ -1004,9 +1037,9 @@ class XMVBNBO:
         
         for idx in active_indices:
             occupancy = nbo_data[idx].occupancy
-            if occupancy > 1.0:
+            if occupancy > 1.5:
                 nae += 2
-            elif 0.5 < occupancy <= 1.0:
+            elif 0.2 < occupancy <= 1.5:
                 nae += 1
             else:
                 pass
@@ -1218,7 +1251,6 @@ class XMVBNBO:
         xyz_block = f"{num_atoms}\n\n{self.geometry_text}"
         CHARGE = self.input_data.charge
         HIDE_HYDROGENS = False
-
         result = infer_active_atom_order(
             xyz_block,
             active_atoms,
@@ -1504,7 +1536,7 @@ class autoVBMain:
         
         logger.info(
             f"Successfully! {method} converged in "
-            f"{self.parsed_data.steps} iterations"
+            f"{self.parsed_data.steps} iterations "
             f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
         )
         self._log_xmo_energy_summary(self.parsed_data)
@@ -1541,12 +1573,13 @@ class autoVBMain:
 
         logger.info(f"E({method.upper()}) = {parsed_data.energy:.8f} a.u.")
 
-        for key in method_energy_keys[method]:
-            if key not in parsed_data.energy_terms:
-                continue
-            value = parsed_data.energy_terms[key]
-            unit = "" if key == "lambda_parameter" else " a.u."
-            logger.info(f"{energy_labels[key]} = {value:.8f}{unit}")
+        if method in method_energy_keys:
+            for key in method_energy_keys[method]:
+                if key not in parsed_data.energy_terms:
+                    continue
+                value = parsed_data.energy_terms[key]
+                unit = "" if key == "lambda_parameter" else " a.u."
+                logger.info(f"{energy_labels[key]} = {value:.8f}{unit}")
 
     def timed_call(self, step_name: str, func, *args, **kwargs):
         step_start = datetime.datetime.now()
