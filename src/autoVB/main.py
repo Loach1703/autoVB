@@ -409,7 +409,7 @@ class XMVBNBO:
 
     ##### 自动选择活性空间 #####
 
-    def auto_select_active_space(self, threshold: float=1.8, auto_set=False) -> tuple[int, int, List[int]]:
+    def auto_select_active_space_thre(self, threshold: float=1.8, auto_set=False) -> tuple[int, int, List[int]]:
         '''
         根据NBO占据数自动选择活性空间，返回活性电子数, 活性轨道数
         Args:
@@ -436,7 +436,7 @@ class XMVBNBO:
             logger.info(f"Selected NBO orbital {i+1}, Occupation number: {nbo_data[i].occupancy:.4f}, Atom(s): {atom_name}")
 
         # 计算出活性轨道数量，活性电子数量
-        self.get_as_from_aoi(active_orbital_indices)
+        active_electron, active_orbital = self.get_as_from_aoi(active_orbital_indices)
         if auto_set == True:
             if active_orbital == 0 or active_electron == 0:
                 raise ValueError("No active orbitals selected based on the given threshold. Please adjust the threshold or check the occupation numbers.")
@@ -446,6 +446,9 @@ class XMVBNBO:
                 self.set_active_space(active_electron, active_orbital)
         
         return active_electron, active_orbital, active_orbital_indices
+
+    def auto_select_active_space_as(self):
+        pass
 
     def auto_select_active_space_by_rethre(self, threshold: float=1.95, auto_set=False) -> tuple[int, int, List[int]]:
         '''
@@ -475,7 +478,7 @@ class XMVBNBO:
             logger.info(f"Selected NBO orbital {i+1}, Occupation number: {nbo_data[i].occupancy:.5f}, Rectified occupancy: {self.rectified_occupancy[i]:.5f}, Atom(s): {atom_name}")
 
         # 计算出活性轨道数量，活性电子数量
-        self.get_as_from_aoi(active_orbital_indices)
+        active_electron, active_orbital = self.get_as_from_aoi(active_orbital_indices)
         if auto_set == True:
             if active_orbital == 0 or active_electron == 0:
                 raise ValueError("No active orbitals selected based on the given threshold. Please adjust the threshold or check the occupation numbers.")
@@ -496,19 +499,19 @@ class XMVBNBO:
             tuple: (tuple[int, int, List[int]]): 活性电子数, 活性轨道数, 活性轨道索引列表
         '''
         valid_occupations = self.occupation_numbers[self.occupation_numbers > 1.0]
-        # 阈值不能超过1.96，基本可以排除大多数sigma键
-        threshold = min(float(valid_occupations.min()) + 0.005, max_threshold)
-        nae, nao, aoi = self.auto_select_active_space(threshold=threshold, auto_set=False)
+        # 默认阈值不能超过1.96，基本可以排除大多数sigma键
+        threshold = min(float(valid_occupations.min()) + 0.002, max_threshold)
+        nae, nao, aoi = self.auto_select_active_space_thre(threshold=threshold, auto_set=False)
         # 检查选出的活性轨道数量
-        logger.info(f"Automatically selected active space with threshold {threshold:.2f}: {nae} electrons / {nao} orbitals.")
+        logger.info(f"Automatically selected active space with threshold {threshold:.3f}: {nae} electrons / {nao} orbitals.")
         # 如果活性轨道过多，则降低活性空间的选择阈值
         if nao >= 14 or nae >= 14:
             logger.warning(f"Automatically selected active space has  {nae} electrons / {nao} orbitals, trying to reduce the threshold to select fewer active orbitals......")
-            for _ in range(100):
+            for _ in range(1000):
                 if nao < 14:
                     break
-                threshold -= 0.005
-                nae, nao, aoi = self.auto_select_active_space(threshold=threshold, auto_set=False)
+                threshold -= 0.002
+                nae, nao, aoi = self.auto_select_active_space_thre(threshold=threshold, auto_set=False)
                 logger.info(f"Trying threshold {threshold:.2f}: {nae} electrons / {nao} orbitals")
         # 最终检查选出的活性空间是否合理，如果仍然过大则给出警告提示用户手动选择
         if nao >= 14 or nae >= 14:
@@ -524,7 +527,7 @@ class XMVBNBO:
         1. BD轨道，成键占据数小于1.96的轨道
         2. BD轨道，成键小于1.99，同时反键大于0.06，（这个类型可以称为BD-BD*）
         3. LP轨道，占据数小于1.96的轨道
-        4. 如果按照上述规则无法选到任何活性空间（这代表所有轨道都接近双占），则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.005的方式选择活性轨道
+        4. 如果按照上述规则无法选到任何活性空间（这代表所有轨道都接近双占），则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.002的方式选择活性轨道
         Args:
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
         Returns:
@@ -737,7 +740,7 @@ class XMVBNBO:
             logger.warning(f"No active orbitals selected by default rules. Trying use iterative method based on minimum occupation number to select active orbitals...")
             nae, nao, active_indices = self.auto_select_active_space_iter(auto_set=auto_set, max_threshold=2.00)
             # raise ValueError("No active orbitals selected by default rules. Please manually select the active space or check the NBO occupation numbers.")
-
+            
         logger.info(f"Final default active space: {nae} electrons / {nao} orbitals")
         active_indices_1based = [idx + 1 for idx in active_indices]
         logger.info(f"Final default active orbital indices (1-based): {active_indices_1based}")
@@ -824,7 +827,7 @@ class XMVBNBO:
 
         # 手动设置了挑选阈值
         elif threshold > 1:
-            nae, nao, active_indices = self.auto_select_active_space(threshold=threshold)
+            nae, nao, active_indices = self.auto_select_active_space_thre(threshold=threshold)
             # active_indices = self.get_active_orbital_indices(nae, nao)
 
         # rethre，修正占据数的测试
