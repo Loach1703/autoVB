@@ -116,9 +116,10 @@ class XmoParsedData:
         orbital_to_atom: 活性轨道编号到 `$geo` 原子编号的映射。
         geo: `$geo` 片段中的原子坐标列表。
         geo_text: `$geo` 片段中的纯文本坐标，不包含 `$geo` 和 `$end` 标记。
+        converged: 是否成功收敛；若没有找到收敛摘要则为 `None`。
         steps: 收敛所用迭代步数；若未找到则为 `None`。
-        energy: 按方法选取的收敛摘要最终能量；若未找到则为 `None`。
-        energy_terms: 收敛摘要中的可变能量项，例如 `vbscf_energy`、
+        energy: 按方法选取的收敛/失败摘要能量；若未找到则为 `None`。
+        energy_terms: 收敛/失败摘要中的可变能量项，例如 `vbscf_energy`、
             `total_energy`、`correlation_energy`、`lam_dfvb_energy`、
             `dfvb_correlation_energy` 和 `lambda_parameter`。
         convergence_process: 收敛迭代表，包含 `iter`、`energy`、`de`、`gnorm`
@@ -139,6 +140,7 @@ class XmoParsedData:
     orbital_to_atom: dict[int, int]
     geo: list[XmoGeometryAtom]
     geo_text: str
+    converged: bool | None
     steps: int | None
     energy: float | None
     energy_terms: dict[str, float]
@@ -165,6 +167,7 @@ class XmoParsedData:
             "orbital_to_atom": self.orbital_to_atom,
             "geo": [atom.to_dict() for atom in self.geo],
             "geo_text": self.geo_text,
+            "converged": self.converged,
             "steps": self.steps,
             "energy": self.energy,
             "convergence_steps": self.convergence_steps,
@@ -181,12 +184,12 @@ class XmoParsedData:
 
     @property
     def convergence_steps(self) -> int | None:
-        """兼容旧字段名，返回收敛迭代步数。"""
+        """兼容旧字段名，返回收敛或失败摘要中的迭代步数。"""
         return self.steps
 
     @property
     def convergence_energy(self) -> float | None:
-        """兼容旧字段名，返回按方法选取的收敛能量。"""
+        """兼容旧字段名，返回按方法选取的摘要能量。"""
         return self.energy
 
     def save_geo_text(self, output_file: str | Path) -> None:
@@ -218,8 +221,10 @@ class XmoParser:
     _INT_RANGE_RE: ClassVar[re.Pattern[str]] = re.compile(
         r"^(?P<begin>\d+)-(?P<end>\d+)$"
     )
-    _CONVERGED_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"\bconverged\s+in\s+(?P<steps>\d+)\s+iterations\b",
+    _CONVERGENCE_STATUS_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"\b(?P<method>[A-Za-z0-9_-]+)\s+"
+        r"(?P<status>converged|failed\s+to\s+converge)\s+"
+        r"in\s+(?P<steps>\d+)\s+iterations\b",
         re.IGNORECASE,
     )
     _TOTAL_ENERGY_RE: ClassVar[re.Pattern[str]] = re.compile(
@@ -282,6 +287,7 @@ class XmoParser:
             orbital_to_atom=orbital_to_atom,
             geo=self._parse_geo(geo_lines),
             geo_text=self._section_plain_text(geo_lines),
+            converged=self._parse_converged(lines),
             steps=self._parse_convergence_steps(lines),
             energy=self._parse_convergence_energy(method, energy_terms),
             energy_terms=energy_terms,
@@ -581,10 +587,19 @@ class XmoParser:
                 clean_lines.append(clean_line)
         return "\n".join(clean_lines)
 
-    def _parse_convergence_steps(self, lines: list[str]) -> int | None:
-        """读取 `VBSCF converged in N iterations` 中的收敛步数。"""
+    def _parse_converged(self, lines: list[str]) -> bool | None:
+        """判断 XMVb 是否明确成功收敛。"""
         for line in lines:
-            match = self._CONVERGED_RE.search(line)
+            match = self._CONVERGENCE_STATUS_RE.search(line)
+            if match:
+                status = match.group("status").lower()
+                return status == "converged"
+        return None
+
+    def _parse_convergence_steps(self, lines: list[str]) -> int | None:
+        """读取收敛或失败摘要中的迭代步数。"""
+        for line in lines:
+            match = self._CONVERGENCE_STATUS_RE.search(line)
             if match:
                 return int(match.group("steps"))
         return None
@@ -610,17 +625,17 @@ class XmoParser:
     def _parse_energy_terms(self, lines: list[str]) -> dict[str, float]:
         """读取收敛摘要中的可变能量项。"""
         terms: dict[str, float] = {}
-        found_convergence = False
+        found_convergence_summary = False
         start_index = 0
         for index, line in enumerate(lines):
-            if self._CONVERGED_RE.search(line):
-                found_convergence = True
+            if self._CONVERGENCE_STATUS_RE.search(line):
+                found_convergence_summary = True
                 start_index = index
                 break
 
-        # 只读取收敛摘要块，避免把后续 virial analysis 里的 TOTAL ENERGY 混进来。
+        # 只读取收敛/失败摘要块，避免把后续 virial analysis 里的 TOTAL ENERGY 混进来。
         for line in lines[start_index:]:
-            if found_convergence and line.strip().startswith("******"):
+            if found_convergence_summary and line.strip().startswith("******"):
                 break
             match = self._ENERGY_TERM_RE.match(line)
             if not match:

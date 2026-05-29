@@ -35,9 +35,11 @@ def normalize_memory(mem: str) -> str:
     if mem.lower().endswith("g"):
         return mem[:-1] + "GB"
     if mem.lower().endswith("m"):
-        return mem[:-1] + "MB"
+        mem = int(mem[:-1])
+        return str(int(mem / 1024))  + "GB"
     if mem.isdigit():
-        return mem + "MB"
+        return str(int(int(mem) / 1024)) + "GB"
+        # return mem + "MB"
     return mem
 
 

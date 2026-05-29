@@ -72,6 +72,7 @@ Renormalized Weights
         {"begin": 1, "end": 2}
     ]
     assert parsed.to_dict()["cc_weights"][0]["flat_orbitals"] == [1, 2]
+    assert parsed.converged is None
     assert parsed.convergence_steps is None
     assert parsed.convergence_energy is None
     assert parsed.energy_terms == {}
@@ -373,6 +374,7 @@ def test_xmo_parser_reads_convergence_information(tmp_path):
 
     assert parsed.convergence_steps == 1
     assert parsed.convergence_energy == -1.1
+    assert parsed.converged is True
     assert parsed.steps == 1
     assert parsed.energy == -1.1
     assert parsed.energy_terms == {"total_energy": -1.1}
@@ -393,8 +395,47 @@ def test_xmo_parser_reads_convergence_information(tmp_path):
         },
     ]
     assert parsed.to_dict()["convergence_steps"] == 1
+    assert parsed.to_dict()["converged"] is True
     assert parsed.to_dict()["energy_terms"] == {"total_energy": -1.1}
     assert parsed.to_dict()["convergence_process"][1]["time"] == 0.2
+
+
+def test_xmo_parser_reads_failed_convergence_information(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        minimal_xmo(
+            """
+                ITER           ENERGY               DE              GNORM
+               2000      -2086.0540128888     -0.0000000020      0.0023042342
+EXCEED MAX ITERATIONS
+
+                        VBSCF Failed to converge in  2001 iterations
+
+                  Total Energy:  -2086.05401289
+
+                 ******  OVERLAP OF VB STRUCTURES  ******
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.50 ****** 1-2
+"""
+        ),
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+
+    assert parsed.converged is False
+    assert parsed.convergence_steps == 2001
+    assert parsed.convergence_energy == -2086.05401289
+    assert parsed.energy_terms == {"total_energy": -2086.05401289}
+    assert parsed.convergence_process == [
+        {
+            "iter": 2000,
+            "energy": -2086.0540128888,
+            "de": -0.0000000020,
+            "gnorm": 0.0023042342,
+        }
+    ]
+    assert parsed.to_dict()["converged"] is False
 
 
 def test_xmo_parser_reads_vbpt2_energy_terms(tmp_path):
@@ -418,6 +459,7 @@ def test_xmo_parser_reads_vbpt2_energy_terms(tmp_path):
     parsed = XmoParser(xmo_path).parse()
 
     assert parsed.method == "vbpt2"
+    assert parsed.converged is True
     assert parsed.convergence_steps == 8
     assert parsed.energy == -91.98406517
     assert parsed.energy_terms == {
@@ -454,6 +496,7 @@ def test_xmo_parser_reads_lam_dfvb_energy_terms(tmp_path):
     parsed = XmoParser(xmo_path).parse()
 
     assert parsed.method == "lam-dfvb=blyp"
+    assert parsed.converged is True
     assert parsed.convergence_steps == 10
     assert parsed.energy == -92.10518498
     assert parsed.energy_terms == {

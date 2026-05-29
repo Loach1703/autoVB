@@ -178,11 +178,16 @@ class XmoToDrawerInputConverter:
             被选中的权重行。
 
         Raises:
-            ValueError: 找不到 `baseline_index` 指定的权重行。
+            ValueError: 当前权重表为空。
         """
-        for weight in self._weights():
+        weight_list = self._weights()
+        for weight in weight_list:
             if weight.index == self.baseline_index:
                 return weight
+        
+        # 如果没有找到指定的权重行，输出权重最大的行
+        if weight_list:
+            return max(weight_list, key=lambda weight: (weight.weight, -weight.index))
 
         raise ValueError(
             f"Cannot find {self.weight_table} weight with index {self.baseline_index}."

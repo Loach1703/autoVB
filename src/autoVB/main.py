@@ -91,9 +91,9 @@ class VBSettings:
         if self.bond_first and not self.aoa:
             raise ValueError("VBSettings: 'bond_first' is a sub-option of 'aoa', it requires 'aoa' to be set")
 
-        # guess参数可选值：nbo, pnbo
-        if self.guess not in ("nbo", "pnbo"):
-            raise ValueError("VBSettings: 'guess' must be 'nbo' or 'pnbo'")
+        # guess参数可选值：nbo, pnbo, gvb
+        if self.guess not in ("nbo", "pnbo", "gvb"):
+            raise ValueError("VBSettings: 'guess' must be 'nbo', 'pnbo', or 'gvb'")
 
         # acitve_order的动态默认值：如果有aoa，则默认按照aoa顺序，否则设为rumer
         if self.active_order == "default":
@@ -422,7 +422,8 @@ class XMVBNBO:
         active_electron = 0
         active_orbital_indices: list[int] = []
         # 筛选占据数大于1且小于等于threshold的轨道
-        valid_occupied_indices = np.where((self.occupation_numbers > 1.0) & (self.occupation_numbers <= threshold))[0]
+        TOP = 0.02 if self.mol.spin == 0 else 0.01
+        valid_occupied_indices = np.where((self.occupation_numbers > TOP) & (self.occupation_numbers <= threshold))[0]
         # 填充到 aoi 中
         active_orbital_indices = valid_occupied_indices.tolist()
         nbo_data = self.nbo_parser.nbo_data
@@ -498,7 +499,7 @@ class XMVBNBO:
         Returns:
             tuple: (tuple[int, int, List[int]]): 活性电子数, 活性轨道数, 活性轨道索引列表
         '''
-        valid_occupations = self.occupation_numbers[self.occupation_numbers > 1.0]
+        valid_occupations = self.occupation_numbers[self.occ_indices]
         # 默认阈值不能超过1.96，基本可以排除大多数sigma键
         threshold = min(float(valid_occupations.min()) + 0.002, max_threshold)
         nae, nao, aoi = self.auto_select_active_space_thre(threshold=threshold, auto_set=False)
@@ -1356,40 +1357,55 @@ class autoVBMain:
         self.input_data = input_data
         filename = self.input_data.filename
         self.nbo_gjf_name = f"{filename}_nbo"
+        self.automr_gvb_name = f"{filename}_gvb"
         self.xmi_name = f"{filename}_vb"
         self.blw_name = f"{filename}_blw"
+        self._check_environment()
+
+    def _check_environment(self):
+        # 检查各种环境变量，但不是每个软件都需要的
         self._check_gaussian_env()
-        if not self.input_data.vbsettings.novb:
-            self._check_xmvb_env()
+        self._check_formchk_env()
+        self._check_xmvb_env()
+        self._check_automr_env()
+        self._check_gamess_env()
 
     def _check_gaussian_env(self):
         self.gaussian_exe = find_executable_in_env()
-        if not self.gaussian_exe:
-            raise RuntimeError(
-                "can not find Gaussian execution, check environment variable GAUSS_EXE or PATH for Gaussian executable.\n"
-            )
-        
-        else:
-            logger.info(f"find Gaussian execution: {self.gaussian_exe}")
+        logger.info(f"find Gaussian execution: {self.gaussian_exe}")
 
+    def _check_formchk_env(self):
         # 检查 formchk
         self.formchk_exe = find_tool("formchk")
-        if not self.formchk_exe:
-            raise RuntimeError(
-                "can not find formchk execution, check if formchk is in PATH or specify its location in the configuration file.\n"
-            )
-    
-        else:
-            logger.info(f"find formchk execution: {self.formchk_exe}")
+        logger.info(f"find formchk execution: {self.formchk_exe}")
 
     def _check_xmvb_env(self):
         self.xmvb_exe = find_tool("xmvb")
-        if not self.xmvb_exe:
-            raise RuntimeError(
-                "can not find XMVB execution, check if xmvb is in PATH or specify its location in the configuration file.\n"
-            )
-        else:
-            logger.info(f"find XMVB execution: {self.xmvb_exe}")
+        logger.info(f"find XMVB execution: {self.xmvb_exe}")
+
+    def _check_automr_env(self):
+        self.automr_exe = find_tool("automr")
+        logger.info(f"find MOKIT automr execution: {self.automr_exe}")
+
+    def _check_gamess_env(self):
+        # GAMESS的环境变量检查比较特殊，优先检查GMS环境变量，如果存在则直接使用；如果不存在，则尝试在系统路径中寻找rungms工具
+        gms_env = os.environ.get("GMS")
+        if gms_env:
+            gms_path = Path(gms_env).expanduser()
+            if gms_path.exists() and os.access(gms_path, os.X_OK):
+                self.gamess_exe = str(gms_path)
+                os.environ["GMS"] = self.gamess_exe
+                logger.info(f"find GAMESS execution from GMS: {self.gamess_exe}")
+                return
+            gms_tool = find_tool(gms_env)
+            if gms_tool:
+                self.gamess_exe = gms_tool
+                os.environ["GMS"] = self.gamess_exe
+                logger.info(f"find GAMESS execution from GMS: {self.gamess_exe}")
+                return
+
+        self.gamess_exe = find_tool("rungms")
+        logger.info(f"find GAMESS execution: {self.gamess_exe}")
 
     def generate_gjf_from_geo(self):
         basis = self.input_data.basis
@@ -1404,6 +1420,26 @@ class autoVBMain:
         from .io.writers import write_gjf_nbo_file
         write_gjf_nbo_file(mol, self.nbo_gjf_name, method=self.input_data.vbsettings.nbo, mem=self.input_data.mem, nproc=self.input_data.nproc)
         logger.info(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
+
+    def generate_automr_gvb(self):
+        basis = self.input_data.basis
+        charge = self.input_data.charge
+        spin = self.input_data.spin
+        mol = gto.M(
+            atom=self.input_data.geometry,
+            basis=basis,
+            charge=charge,
+            spin=spin - 1,  # Gaussian的自旋多重度是2S+1，而pyscf的spin是2S
+        )
+        from .io.writers import write_automr
+        write_automr(
+            mol,
+            self.automr_gvb_name,
+            method='GVB',
+            mem=self.input_data.mem,
+            nproc=self.input_data.nproc,
+        )
+        logger.info(f"Wrote MOKIT automr GVB input file to {self.automr_gvb_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
     def generate_nbo_to_xmi(self):
         '''
@@ -1457,6 +1493,10 @@ class autoVBMain:
     def run_formchk(self, input_name: str):
         formchk_cmd = f"{self.formchk_exe} {input_name}.chk {input_name}.fch"
         self.run_subprocess_command(formchk_cmd, f"formchk execution completed successfully for {input_name}.chk.", f"formchk execution failed for {input_name}.chk, may be Gaussian calculation failed.")
+
+    def run_automr_gvb(self):
+        automr_cmd = f"{self.automr_exe} {self.automr_gvb_name}.gjf 1>{self.automr_gvb_name}.out 2>{self.automr_gvb_name}.err"
+        self.run_subprocess_command(automr_cmd, f"MOKIT automr GVB execution completed successfully for {self.automr_gvb_name}.gjf.", f"MOKIT automr GVB execution failed for {self.automr_gvb_name}.gjf, check {self.automr_gvb_name}.out and {self.automr_gvb_name}.err for details.")
 
     def run_xmvb(self):
         if self.input_data.method.lower() == 'blw':
@@ -1536,12 +1576,24 @@ class autoVBMain:
         logger.info(f"Parsing XMVB output file {xmo_file} to extract information...")
         self.parsed_data = XmoParser(xmo_file).parse()
         method = self.input_data.method.upper()
-        
-        logger.info(
-            f"Successfully! {method} converged in "
-            f"{self.parsed_data.steps} iterations "
-            f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
-        )
+
+        if self.parsed_data.converged is True:
+            logger.info(
+                f"Successfully! {method} converged in "
+                f"{self.parsed_data.steps} iterations "
+                f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
+            )
+        elif self.parsed_data.converged is False:
+            logger.warning(
+                f"{method} failed to converge in "
+                f"{self.parsed_data.steps} iterations "
+                f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
+            )
+        else:
+            logger.warning(
+                f"Could not determine whether {method} converged "
+                f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
+            )
         self._log_xmo_energy_summary(self.parsed_data)
         return self.parsed_data
 
@@ -1574,7 +1626,12 @@ class autoVBMain:
             ),
         }
 
-        logger.info(f"E({method.upper()}) = {parsed_data.energy:.8f} a.u.")
+        if parsed_data.energy is None:
+            logger.warning(f"Cannot find {method.upper()} energy in XMVB output.")
+            return
+
+        energy_prefix = "E" if parsed_data.converged is not False else "Last reported E"
+        logger.info(f"{energy_prefix}({method.upper()}) = {parsed_data.energy:.8f} a.u.")
 
         if method in method_energy_keys:
             for key in method_energy_keys[method]:
@@ -1595,12 +1652,26 @@ class autoVBMain:
     def main(self):
         workflow_start = datetime.datetime.now()
 
+        if self.input_data.vbsettings.guess == 'gvb':
+            if not self.automr_exe:
+                raise EnvironmentError("MOKIT automr executable not found in environment. Please install MOKIT and ensure 'automr' is in your PATH.")
+            if not self.gamess_exe:
+                raise EnvironmentError("GAMESS executable not found in environment. Please install GAMESS and ensure 'rungms' is in your PATH or set GMS environment variable.")
+            log_subroutine("Entry MOKIT automr GVB Calculation")
+            self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
+            self.timed_call("run_automr_gvb", self.run_automr_gvb)
+            return # 目前仅计算GVB
+
         # 进行 NBO 计算，生成 .fch 文件供后续提取轨道信息使用
         if self.input_data.vbsettings.nbo_file:
             self.nbo_gjf_name = self.input_data.vbsettings.nbo_file.stem
             logger.info(f"User specified the NBO file directly, skipping Gaussian NBO calculation. NBO file: {self.input_data.vbsettings.nbo_file}")
         else:
             log_subroutine("Entry Gaussian NBO Calculation")
+            if not self.gaussian_exe:
+                raise EnvironmentError("Gaussian executable not found in environment. Please install Gaussian and ensure it is in your PATH.")
+            if not self.formchk_exe:
+                raise EnvironmentError("formchk executable not found in environment. Please ensure Gaussian's formchk tool is in your PATH.")
             self.timed_call("generate_gjf_from_geo", self.generate_gjf_from_geo)
             self.timed_call("run_gaussian", self.run_gaussian, self.nbo_gjf_name)
             self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
@@ -1615,6 +1686,8 @@ class autoVBMain:
             logger.info("VB calculation is skipped due to novb setting.(only generate xmi file from NBO orbitals)")
         else:
             log_subroutine("Entry XMVB Calculation")
+            if not self.xmvb_exe:
+                raise EnvironmentError("XMVB executable not found in environment. Please install XMVB and ensure it is in your PATH.")
             self.timed_call("run_xmvb", self.run_xmvb)
             self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
 

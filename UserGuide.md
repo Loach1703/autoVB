@@ -6,13 +6,16 @@
 如果你对价键理论还不了解，可以查看[ XMVB 中文教程 ](https://xmvb.xmu.edu.cn/xmvb-course-cn/)。
 
 ### 1.1 环境变量配置
-在运行 `autoVB` 之前，请确保下列可执行文件能被找到：Gaussian 可执行文件、`formchk` 与 `xmvb`。常见的配置方法如下：
+在运行 `autoVB` 之前，请确保下列可执行文件能被找到：Gaussian 可执行文件、`formchk` 与 `xmvb`。如果使用 `guess=gvb`，还需要能找到 MOKIT 的 `automr` 与 GAMESS 的 `rungms`。常见的配置方法如下：
 ```bash
 # 指定 Gaussian 可执行程序的完整路径（可为可执行文件或其所在目录）
 export GAUSS_EXE=/share/apps/gaussian/g16/g16
 # 将 XMVB 和 formchk 所在目录加入 PATH（示例路径，请根据实际安装位置修改）
 export PATH=/share/apps/xmvb/latest/bin:$PATH
 export PATH=/share/apps/gaussian/16/formchk:$PATH
+# guess=gvb 时需要 MOKIT automr 与 GAMESS rungms
+export PATH=/share/apps/mokit/bin:$PATH
+export GMS=/share/apps/gamess/rungms
 ```
 
 将配置写入 `~/.bashrc` 或 `~/.profile`（或 `~/.zshrc`）以保持长期可用：
@@ -165,9 +168,10 @@ opt参数，暂未实现
 是否按照结构系数排序价键结构。
 
 ##### 2.3.3.5 guess=n
-生成的 XMVB 使用的初猜设置，可选项包括 `nbo`，`pnbo`。默认值为 `nbo`。
+生成的 XMVB 使用的初猜设置，可选项包括 `nbo`，`pnbo`，`gvb`。默认值为 `nbo`。
 **nbo**：使用 NBO 轨道作为初猜。
 **pnbo**：使用 PNBO 轨道作为初猜。PNBO 轨道是非正交且严格定域的。
+**gvb**：先生成 MOKIT `automr` 输入并调用 GAMESS 进行 GVB 计算。
 
 ##### 2.3.3.6 atom_slice
 对分子轨道作单原子截断（将指定原子外的基函数清零），以生成定域的初猜。一般来说，XMVB 会自动进行截断，所以不需要使用此功能。

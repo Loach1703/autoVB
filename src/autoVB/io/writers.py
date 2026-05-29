@@ -135,3 +135,39 @@ $NBO plot file={filename} $END
 '''
     with open(f'{filename}.gjf', 'w') as f:
         f.write(filetext)
+
+def write_automr(
+    mol: 'gto.Mole',
+    filename: str,
+    method: str = 'GVB',
+    mem: str = '4GB',
+    nproc: int = 4,
+    mokit_keywords: str = '',
+):
+    '''
+    写入适用于MOKIT automr的输入文件
+    Args:
+        mol (gto.Mole): pyscf的分子对象，包含分子结构、基组等信息
+        filename (str): 输出文件名（不带扩展名）
+        method (str): 计算方法，默认为GVB
+        mem (str): 内存设置，默认为4GB
+        nproc (int): 使用的CPU核心数，默认为4
+        mokit_keywords (str): 额外的MOKIT关键词字符串，例如"GVB_prog=GAMESS"，默认为空
+    '''
+    from ..utils.utils import pyscf_to_xyz
+    geometry_text = pyscf_to_xyz(mol)
+    gaussian_basis = to_gaussian_basis_name(mol.basis)
+    mokit_line = f"mokit{{{mokit_keywords}}}" if mokit_keywords else "mokit{}"
+    filetext = f'''%mem={mem}
+%nprocshared={nproc}
+#p {method}/{gaussian_basis}
+
+{mokit_line}
+
+{mol.charge} {mol.spin + 1}
+{geometry_text}
+
+
+'''
+    with open(f'{filename}.gjf', 'w') as f:
+        f.write(filetext)

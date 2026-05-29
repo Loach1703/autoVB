@@ -58,6 +58,47 @@ $end
     assert drawer_input.orbital_to_atom == {1: 1, 2: 3, 3: 5}
 
 
+def test_converter_falls_back_to_highest_weight_baseline(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        """
+$ctrl
+vbscf
+nae=2
+nao=2
+basis=cc-pVDZ
+$end
+
+$orb
+1*2
+1
+2
+$end
+
+$geo
+C 0.0 0.0 0.0
+C 1.0 0.0 0.0
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.10 ****** 1-2
+2 0.90 ****** 1 1
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+    converter = XmoToDrawerInputConverter(
+        parsed,
+        tmp_path,
+        baseline_index=99,
+        hide_hydrogens=False,
+    )
+
+    drawer_input = converter.convert()
+
+    assert drawer_input.active_bond_atom == [[1, 1]]
+
+
 def test_drawer_renders_unpaired_electron_as_radical_dot(tmp_path):
     drawer = MoleculeBondVariantDrawer(
         xyz_file=tmp_path / "dummy.xyz",

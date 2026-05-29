@@ -57,7 +57,9 @@ def draw_xmo_file(
     from ..draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
     from ..draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
     from ..io.xmo_output_parser import XmoParser
+    from ..utils import constants
 
+    print(f'Draw_XMO version: {constants.VERSION}')
     xmo_path = Path(xmo_file)
     if not xmo_path.exists():
         raise FileNotFoundError(f"XMO file not found: {xmo_path}")
