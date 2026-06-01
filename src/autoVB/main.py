@@ -306,11 +306,11 @@ class XMVBNBO:
         if self.input_data.vbsettings.guess == 'pnbo':
             logger.info("Using PNBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.pnbo_orbital_matrix
-        elif self.input_data.vbsettings.guess == 'nbo':
+        else:
             logger.info("Using NBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.nbo_orbital_matrix
 
-        # 如果是开壳层系统，除了读取alpha轨道的占据数，还需要读取beta轨道的占据数，并将两者相加得到总的占据数，用于后续的活性空间选择
+        # 如果是开壳层系统，除了读取alpha轨道的占据数
         if self.mol.spin > 0:
             logger.info("Detected open-shell system, parsing both alpha and beta NBO occupation numbers...")
             logger.info("Using alpha + beta NBO occupation numbers for open-shell active space selection.")
@@ -1407,6 +1407,19 @@ class autoVBMain:
         self.gamess_exe = find_tool("rungms")
         logger.info(f"find GAMESS execution: {self.gamess_exe}")
 
+    def read_nbo(self) -> 'XMVBNBO':
+        '''
+        读取NBO计算结果，从Gaussian的.fch文件中加载分子信息。
+        '''
+        from .io.writers import write_xmi_file
+        fchname = Path(f"{self.nbo_gjf_name}.fch")
+        mol = load_mol_from_fch(fchname)
+        basis = self.input_data.basis
+
+        wxp = XMVBNBO(self.nbo_gjf_name, mol, self.input_data)
+        wxp.set_basis_set(basis)
+        return wxp
+
     def generate_gjf_from_geo(self):
         basis = self.input_data.basis
         charge = self.input_data.charge
@@ -1450,14 +1463,8 @@ class autoVBMain:
         4. 将处理后的轨道信息写入.xmi文件，供XMVB使用。
         '''
         from .io.writers import write_xmi_file
-        fchname = Path(f"{self.nbo_gjf_name}.fch")
-        mol = load_mol_from_fch(fchname)
-        basis = self.input_data.basis
+        wxp = self.wxp
         method = self.input_data.method.lower()
-
-        wxp = XMVBNBO(self.nbo_gjf_name, mol, self.input_data)
-        wxp.set_basis_set(basis)
-        self.wxp = wxp
 
         if method == 'blw':
             log_subroutine("Entry BLW Method")
@@ -1476,6 +1483,12 @@ class autoVBMain:
         passthrough = self.input_data.xmi_passthrough
         write_xmi_file(xmi_path, xmidata, passthrough)
         logger.info(f"Generated XMVB input file {xmi_path} successfully.")
+
+    def generate_gvb_to_xmi(self):
+        from .gvb.gvb import XMVBGVB
+        wxp = self.wxp
+        fch = self.get_gvb_filename()
+        xg = XMVBGVB(fch, input_data=self.input_data, orbital_atoms=wxp.occ_orb_atom)
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
         logger.info(f"Running command: {command}")
@@ -1505,6 +1518,12 @@ class autoVBMain:
             filename = self.xmi_name
         xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {filename}.xmi 1> {filename}.xmo  2> {filename}.err"
         self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {filename}.xmi.", f"XMVB execution failed for {filename}.xmi, check {filename}.xmo for details.")
+
+    def get_gvb_filename(self) -> Path:
+        automr_out = Path(f"{self.automr_gvb_name}.out")
+        line = next(line for line in automr_out.read_text(errors='ignore').splitlines() if line.strip().startswith("$$GMS"))
+        gvb_stem = Path(line.split()[1]).stem
+        return Path(f"{gvb_stem}_s.fch")
 
     def draw_xmo(self, parsed_data: 'XmoParsedData', weight_table: str = 'cc', max_str: int = 20):
         '''
@@ -1658,9 +1677,8 @@ class autoVBMain:
             if not self.gamess_exe:
                 raise EnvironmentError("GAMESS executable not found in environment. Please install GAMESS and ensure 'rungms' is in your PATH or set GMS environment variable.")
             log_subroutine("Entry MOKIT automr GVB Calculation")
-            self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
-            self.timed_call("run_automr_gvb", self.run_automr_gvb)
-            return # 目前仅计算GVB
+            # self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
+            # self.timed_call("run_automr_gvb", self.run_automr_gvb)
 
         # 进行 NBO 计算，生成 .fch 文件供后续提取轨道信息使用
         if self.input_data.vbsettings.nbo_file:
@@ -1676,10 +1694,16 @@ class autoVBMain:
             self.timed_call("run_gaussian", self.run_gaussian, self.nbo_gjf_name)
             self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
 
-        # 生成 .xmi 文件
-        log_subroutine("Entry NBO to XMI Conversion")
-        self.timed_call("generate_nbo_to_xmi", self.generate_nbo_to_xmi)
-        xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
+        self.wxp = self.read_nbo()
+        if self.input_data.vbsettings.guess == 'gvb':
+            log_subroutine("Entry GVB to XMI Conversion")
+            self.timed_call("generate_gvb_to_xmi", self.generate_gvb_to_xmi)
+            return
+        else:
+            # 生成 .xmi 文件
+            log_subroutine("Entry NBO to XMI Conversion")
+            self.timed_call("generate_nbo_to_xmi", self.generate_nbo_to_xmi)
+            xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
 
         # VB计算是可选的，如果novb设置为True，则跳过VB计算步骤，仅生成 .xmi 文件
         if self.input_data.vbsettings.novb:
