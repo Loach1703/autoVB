@@ -59,6 +59,7 @@ class VBSettings:
     stru: str = "default"
     sort: bool = False
     novb: bool = False
+    nogvb: bool = False
     guess: str = "nbo"
     active_order: str = "default"
     nbo_file: Path = None
@@ -1683,9 +1684,12 @@ class autoVBMain:
                 raise EnvironmentError("MOKIT automr executable not found in environment. Please install MOKIT and ensure 'automr' is in your PATH.")
             if not self.gamess_exe:
                 raise EnvironmentError("GAMESS executable not found in environment. Please install GAMESS and ensure 'rungms' is in your PATH or set GMS environment variable.")
-            log_subroutine("Entry MOKIT automr GVB Calculation")
-            self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
-            self.timed_call("run_automr_gvb", self.run_automr_gvb)
+            if not self.input_data.vbsettings.nogvb:
+                log_subroutine("Entry MOKIT automr GVB Calculation")
+                self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
+                self.timed_call("run_automr_gvb", self.run_automr_gvb)
+            else:
+                logger.info("GVB calculation is skipped due to nogvb setting.")
 
         # 进行 NBO 计算，生成 .fch 文件供后续提取轨道信息使用
         if self.input_data.vbsettings.nbo_file:

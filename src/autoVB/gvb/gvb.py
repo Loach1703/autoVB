@@ -2,6 +2,8 @@ from pathlib import Path
 import re
 import os
 import io
+import shutil
+import subprocess
 from datetime import datetime
 from collections import Counter
 from contextlib import redirect_stdout
@@ -76,14 +78,19 @@ class XMVBGVB:
         self.fch_path = Path(fch_path)
         if not self.fch_path.is_file():
             raise FileNotFoundError(f"GVB fch file not found: {self.fch_path}")
+        self.input_orbital_atoms = [list(atoms) for atoms in orbital_atoms] if orbital_atoms else None
 
         # MOKIT 常见命名是 `xxx_s.fch` 搭配 `xxx.gms`，所以这里允许不手动传 gms。
+        self.original_fch_path = self.fch_path
         self.gms_path = Path(gms_path) if gms_path is not None else self._infer_gms_path()
+        self.dat_path = self._infer_dat_path()
         self.input_data = input_data
         self.filename = filename or self._default_filename()
         self.origin_filename = self.filename
-        self.input_orbital_atoms = [list(atoms) for atoms in orbital_atoms] if orbital_atoms else None
         self.mol = self._load_mol()
+        self.cf_dat_path: Optional[Path] = None
+        self.cf_fch_path: Optional[Path] = None
+
         self.basis_set = input_data.basis if input_data is not None else ""
         self.geometry_text = pyscf_to_xyz(self.mol)
         symbols = [self.mol.atom_pure_symbol(i) for i in range(self.mol.natm)]
@@ -105,7 +112,7 @@ class XMVBGVB:
         self.pair_information: Optional[np.ndarray] = None
         self.gvb_pair_count: int = 0
 
-        # 读完原始轨道之后，顺手把后续 XMVB 会用到的几个分块也准备好。
+        # 读完原始轨道之后，把后续 XMVB 会用到的几个分块也准备好。
         self.read()
         logger.debug(self.occupation_numbers)
         logger.debug(f"GVB pair count: {self.gvb_pair_count}")
@@ -155,6 +162,21 @@ class XMVBGVB:
                 return candidate
         return None
 
+    def _infer_dat_path(self) -> Path:
+        """
+        根据 MOKIT/GAMESS 的默认命名寻找对应的 `.dat` 文件。
+
+        MOKIT 最常见的组合是 `xxx_s.fch` 搭配 `xxx.dat`，所以这里把
+        `_s` 后缀去掉再换成 `.dat`。
+
+        Returns:
+            Path: 推断出的 `.dat` 文件路径。
+        """
+        stem = self.original_fch_path.stem
+        if stem.endswith("_s"):
+            stem = stem[:-2]
+        return self.original_fch_path.with_name(f"{stem}.dat")
+
     def _load_mol(self) -> 'gto.Mole':
         """
         获取用于分析轨道原子贡献的 PySCF mol 对象。
@@ -167,7 +189,7 @@ class XMVBGVB:
 
     def _df_indices(self) -> None:
         """
-        找出 DXX 和 FXXX 基函数的位置，后面按 XMVB 习惯调整列顺序。
+        找出 DXX 和 FXXX 基函数的位置，后面按 XMVB 的顺序调整列顺序。
 
         Returns:
             None
@@ -204,14 +226,57 @@ class XMVBGVB:
         Returns:
             None
         """
-        self.read_fch_orbitals()
+        self.read_fch_orbitals(self.fch_path)
         self.read_pair_information()
+        self.cf_fch_path = self.prepare_cf_orbitals()
 
-    def read_fch_orbitals(self) -> tuple[np.ndarray, np.ndarray]:
+    def prepare_cf_orbitals(self) -> Path:
+        """
+        尝试生成 Coulson-Fischer 轨道并写入新的 fch 文件。
+
+        MOKIT 的 `gen_cf_orb` 只能处理 GAMESS `.dat`，会生成 `xxx_new.dat`；
+        如果后面想像普通 fch 一样读取或可视化这些 CF 轨道，还需要再调用
+        `dat2fch xxx_new.dat xxx_cf.fch` 把轨道写进 fch。这个函数成功时返回
+        新的 `xxx_cf.fch`，失败时保留原始 GVB natural orbital fch。
+
+        Returns:
+            Path: 实际用于后续读取轨道的 fch 文件路径。
+        """
+        from mokit.lib.lo import gen_cf_orb
+        npair = self.pair_information.shape[0]
+        nopen = int(getattr(self.mol, "spin", 0))
+        ndb = int(self.mol.nelec[0] - npair - nopen)
+        dat2fch_exe = shutil.which("dat2fch")
+
+        gen_cf_orb(datname=str(self.dat_path), ndb=ndb, nopen=nopen)
+
+        self.cf_dat_path = self.dat_path.with_name(f"{self.dat_path.stem}_new.dat")
+        self.cf_fch_path = self.original_fch_path.with_name(f"{self.original_fch_path.stem}_cf.fch")
+        shutil.copy2(self.original_fch_path, self.cf_fch_path)
+        proc = subprocess.run(
+            [dat2fch_exe, str(self.cf_dat_path), str(self.cf_fch_path)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        logger.info(
+            "Generated Coulson-Fischer orbital fch %s from %s.",
+            self.cf_fch_path,
+            self.cf_dat_path,
+        )
+
+        return self.cf_fch_path
+
+    def read_fch_orbitals(self, fchname:str) -> tuple[np.ndarray, np.ndarray]:
         """
         从 MOKIT 生成的 fch 文件读取 GVB 轨道和占据数。
 
         MOKIT 的 `fch2py` 返回的是 AO x MO 的矩阵；XMVB 初猜生成时一行一个轨道，所以这里保存一份转置后的 `orbital_matrix`。
+
+        Args:
+            fchname: fch 文件路径。
 
         Returns:
             tuple[np.ndarray, np.ndarray]: `(mo_coeff, occupation_numbers)`。
@@ -220,7 +285,6 @@ class XMVBGVB:
         from mokit.lib.fch2py import fch2py
         from mokit.lib.rwwfn import read_eigenvalues_from_fch, read_nbf_and_nif_from_fch
 
-        fchname = str(self.fch_path)
         # nbf/nif 是 fch2py 必须要的尺寸信息，先读出来再取 MO 系数。
         self.nbf, self.nif = read_nbf_and_nif_from_fch(fchname)
         self.mo_coeff: np.ndarray = fch2py(fchname, self.nbf, self.nif, "a")
@@ -242,7 +306,7 @@ class XMVBGVB:
         """
         从 GAMESS `.gms` 输出中读取 `PAIR INFORMATION` 表。
 
-        这一步复用 autoVB 现成的 `read_gvb_pair_information`，返回的矩阵每一行
+        用函数 `read_gvb_pair_information`，返回的矩阵每一行
         对应一个 GVB pair。当前列顺序是：
         `pair_id, orb1, orb2, ci1, ci2, occ1, occ2, overlap, energy_lowering`。
 
