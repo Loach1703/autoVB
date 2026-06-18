@@ -1451,6 +1451,7 @@ class autoVBMain:
             method='GVB',
             mem=self.input_data.mem,
             nproc=self.input_data.nproc,
+            mokit_keywords='cart'
         )
         logger.info(f"Wrote MOKIT automr GVB input file to {self.automr_gvb_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
@@ -1486,9 +1487,15 @@ class autoVBMain:
 
     def generate_gvb_to_xmi(self):
         from .gvb.gvb import XMVBGVB
+        from .io.writers import write_xmi_file
         wxp = self.wxp
         fch = self.get_gvb_filename()
-        xg = XMVBGVB(fch, input_data=self.input_data, orbital_atoms=wxp.occ_orb_atom)
+        xg = XMVBGVB(fch, self.input_data, orbital_atoms=wxp.occ_orb_atom)
+        xg.set_basis_set(self.input_data.basis)
+        xmi_path = Path(f"{self.xmi_name}.xmi")
+        xmidata = xg.get_xmidata()
+        write_xmi_file(xmi_path, xmidata, self.input_data.xmi_passthrough)
+        logger.info(f"Generated XMVB input file {xmi_path} successfully from GVB orbitals.")
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
         logger.info(f"Running command: {command}")
@@ -1677,8 +1684,8 @@ class autoVBMain:
             if not self.gamess_exe:
                 raise EnvironmentError("GAMESS executable not found in environment. Please install GAMESS and ensure 'rungms' is in your PATH or set GMS environment variable.")
             log_subroutine("Entry MOKIT automr GVB Calculation")
-            # self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
-            # self.timed_call("run_automr_gvb", self.run_automr_gvb)
+            self.timed_call("generate_automr_gvb", self.generate_automr_gvb)
+            self.timed_call("run_automr_gvb", self.run_automr_gvb)
 
         # 进行 NBO 计算，生成 .fch 文件供后续提取轨道信息使用
         if self.input_data.vbsettings.nbo_file:
@@ -1695,15 +1702,14 @@ class autoVBMain:
             self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
 
         self.wxp = self.read_nbo()
+        xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
+        # 生成 .xmi 文件
         if self.input_data.vbsettings.guess == 'gvb':
             log_subroutine("Entry GVB to XMI Conversion")
             self.timed_call("generate_gvb_to_xmi", self.generate_gvb_to_xmi)
-            return
         else:
-            # 生成 .xmi 文件
             log_subroutine("Entry NBO to XMI Conversion")
             self.timed_call("generate_nbo_to_xmi", self.generate_nbo_to_xmi)
-            xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
 
         # VB计算是可选的，如果novb设置为True，则跳过VB计算步骤，仅生成 .xmi 文件
         if self.input_data.vbsettings.novb:

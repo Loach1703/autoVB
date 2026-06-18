@@ -1,9 +1,12 @@
 from pathlib import Path
 import re
 import os
+import io
 from datetime import datetime
+from collections import Counter
+from contextlib import redirect_stdout
 import numpy as np
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 
 from ..io.logging_config import get_logger
 from ..utils.constants import BASIS_FUNCTION_DICT, FLOAT_RE, D_ORBITAL_3TO4, D_ORBITAL_4TO3, F_ORBITAL_3TO4, F_ORBITAL_4TO3
@@ -16,6 +19,7 @@ from ..utils.utils import (
     array_to_orb,
     replace_row_orbital_numbers,
     get_orbital_atom_contribution,
+    pyscf_to_xyz,
 )
 
 if TYPE_CHECKING:
@@ -39,7 +43,7 @@ class XMVBGVB:
         fch_path: MOKIT/GVB 计算后用于读轨道的 fch 文件，通常是 `xxx_s.fch`。
         gms_path: GAMESS 输出文件，用来读取 `PAIR INFORMATION`。
         mo_coeff: MOKIT 读出的 MO 系数矩阵，形状是 AO x MO。
-        orbital_matrix: 转置后的轨道矩阵，形状是 MO x AO，后面生成 XMVB 初猜更顺手。
+        orbital_matrix: 转置后的轨道矩阵，形状是 MO x AO。
         occupation_numbers: fch 中保存的轨道占据数。
         pair_information: GAMESS `PAIR INFORMATION` 表格，列含义见 `read_gvb_pair_information`。
     """
@@ -47,8 +51,8 @@ class XMVBGVB:
     def __init__(
         self,
         fch_path: Path | str,
+        input_data: 'autoVBInputData',
         gms_path: Optional[Path | str] = None,
-        input_data: Optional['autoVBInputData'] = None,
         filename: Optional[str] = None,
         orbital_atoms: Optional[List[List[int]]] = None,
     ) -> None:
@@ -77,8 +81,14 @@ class XMVBGVB:
         self.gms_path = Path(gms_path) if gms_path is not None else self._infer_gms_path()
         self.input_data = input_data
         self.filename = filename or self._default_filename()
-        self.input_orbital_atoms = orbital_atoms
+        self.origin_filename = self.filename
+        self.input_orbital_atoms = [list(atoms) for atoms in orbital_atoms] if orbital_atoms else None
         self.mol = self._load_mol()
+        self.basis_set = input_data.basis if input_data is not None else ""
+        self.geometry_text = pyscf_to_xyz(self.mol)
+        symbols = [self.mol.atom_pure_symbol(i) for i in range(self.mol.natm)]
+        counts = Counter(symbols)
+        self.formula = "".join(f"{sym}{cnt if cnt > 1 else ''}" for sym, cnt in counts.items())
         self.dxx_indices: list[int] = []
         self.fxxx_indices: list[int] = []
         self._df_indices()
@@ -105,7 +115,7 @@ class XMVBGVB:
         self.orbital_atoms = self.gvb_orbital_atoms
         self.split_occ_vir()
         if self.input_orbital_atoms:
-            orb_atoms = self.match_orbital_atoms()
+            self.match_orbital_atoms()
         self.split_act_ina()
 
     ##### 一些mokit默认文件名 #####
@@ -396,31 +406,333 @@ class XMVBGVB:
         self.inactive_occupation_numbers = occ_numbers[self.inactive_indices]
         self.active_orb_atom = [self.occ_orb_atom[i] for i in self.active_indices]
         self.inactive_orb_atom = [self.occ_orb_atom[i] for i in self.inactive_indices]
-        self.active_orbital = len(self.active_indices)
+        self.active_gvb_orbital = len(self.active_indices)
+        self.active_orbital = sum(len(atoms) for atoms in self.active_orb_atom)
         self.active_electron = int(round(float(np.sum(self.active_occupation_numbers))))
 
         logger.info(
-            "Split occupied GVB orbitals: active=%s, inactive=%s, threshold=%.4f",
-            self.active_orbital_matrix.shape[0],
+            "Split occupied GVB orbitals: active_gvb=%s, active_xmvb=%s, inactive=%s, threshold=%.4f",
+            self.active_gvb_orbital,
+            self.active_orbital,
             self.inactive_orbital_matrix.shape[0],
             threshold,
         )
         return self.active_orbital_matrix, self.inactive_orbital_matrix
 
+    ##### 生成XMVB文本的函数 #####
+
+    def set_basis_set(self, basis_set: str) -> None:
+        """
+        设置 XMVB 输入文件中的基组名称。
+
+        Args:
+            basis_set: 基组名称，例如 `cc-pVDZ`。
+
+        Returns:
+            None
+        """
+        self.basis_set = basis_set
+
+    def get_atom_sliced_orbital(self, orbital: np.ndarray, atom_index: int) -> np.ndarray:
+        """
+        将轨道向量中除指定原子外的其他基函数系数清零。
+
+        Args:
+            orbital: 一维轨道向量。
+            atom_index: 原子序号，从 1 开始。
+
+        Returns:
+            np.ndarray: 只保留指定原子 AO 系数的新轨道。
+        """
+        slices = self.mol.aoslice_by_atom()
+        new_orb = np.zeros_like(orbital)
+        a0, a1 = slices[atom_index - 1][2], slices[atom_index - 1][3]
+        new_orb[a0:a1] = orbital[a0:a1]
+        return new_orb
+
+    def get_orb_section_inactive(self, atom_list: List[List[int]]) -> Tuple[str, str]:
+        """
+        获取 XMVB `.xmi` 文件中非活性轨道的 `$orb` 文本。
+
+        Args:
+            atom_list: 非活性轨道原子贡献列表。
+
+        Returns:
+            Tuple[str, str]: `(头文本, 轨道原子文本)`。
+        """
+        head_text = ' '.join(str(len(i)) for i in atom_list)
+        orb_text = ''
+        for orb_atom in atom_list:
+            orb_text += f'{" ".join(str(i) for i in orb_atom)}\n'
+        return head_text, orb_text
+
+    def get_orb_section_active(self, atom_list: List[int]) -> Tuple[str, str]:
+        """
+        获取 XMVB `.xmi` 文件中活性轨道的 `$orb` 文本。
+
+        Args:
+            atom_list: 活性轨道展开后的原子顺序。
+
+        Returns:
+            Tuple[str, str]: `(头文本, 活性轨道原子文本)`。
+        """
+        head_text = f'1*{self.active_orbital}'
+        orb_atom_list = list(atom_list)
+        if orb_atom_list:
+            orb_atom_list[0] = f"{orb_atom_list[0]}   # active orbital start here"
+        orb_text = '\n'.join(str(i) for i in orb_atom_list) + '\n'
+        return head_text, orb_text
+
+    def get_orb_section_total(self, active_order: List[int]) -> str:
+        """
+        获取完整 `$orb` 文本，顺序是非活性轨道在前、活性轨道在后。
+
+        Args:
+            active_order: 活性原子顺序。
+
+        Returns:
+            str: `$orb` 区块正文。
+        """
+        inactive_head, inactive_text = self.get_orb_section_inactive(self.inactive_orb_atom)
+        active_head, active_text = self.get_orb_section_active(active_order)
+        active_text = active_text.strip("\n")
+        orb_number_text = f'{inactive_head} {active_head}'
+        return f'{orb_number_text}\n{inactive_text}{active_text}'
+
+    def get_init_guess_inactive(self, orbital_matrix: np.ndarray) -> Tuple[str, str]:
+        """
+        获取 XMVB `.xmi` 文件中非活性轨道的 `$gus` 初猜文本。
+
+        Args:
+            orbital_matrix: 二维轨道矩阵，每行一条轨道。
+
+        Returns:
+            Tuple[str, str]: `(头文本, 轨道系数文本)`。
+        """
+        head_text = (' ' + str(orbital_matrix.shape[1])) * orbital_matrix.shape[0]
+        orb_text = ''
+        for i, orb in enumerate(orbital_matrix):
+            orb_text += f'# ORBITAL        {i+1}  NAO =    {len(orb)}\n'
+            orb_text += make_xmvb_format_text(orb, per_line=4)
+            orb_text += '\n'
+        return head_text, orb_text
+
+    def get_init_guess_active(
+        self,
+        orbital_matrix: np.ndarray,
+        atom_list: List[List[int]],
+        atom_order_list: Optional[List[int]] = None,
+    ) -> Tuple[str, str]:
+        """
+        获取 XMVB `.xmi` 文件中活性轨道的 `$gus` 初猜文本。
+
+        一条 GVB 活性轨道通常对应一个 NBO 标签，例如 `[1, 2]`。这里会按标签
+        展开成两个原子局域初猜，所以 XMVB 里的活性轨道数是这些标签长度之和。
+
+        Args:
+            orbital_matrix: 二维轨道矩阵，每行一条 GVB 活性轨道。
+            atom_list: 每条活性 GVB 轨道对应的原子标签。
+            atom_order_list: 可选的活性原子输出顺序。
+
+        Raises:
+            ValueError: 当展开出的活性轨道数量和 `self.active_orbital` 不一致时抛出。
+
+        Returns:
+            Tuple[str, str]: `(头文本, 活性轨道系数文本)`。
+        """
+        atom_orb_items: List[Tuple[int, np.ndarray]] = []
+        for orb, oac_item in zip(orbital_matrix, atom_list):
+            for atom in oac_item:
+                if self.input_data is not None and self.input_data.vbsettings.atom_slice:
+                    atom_orb_items.append((atom, self.get_atom_sliced_orbital(orb, atom)))
+                else:
+                    atom_orb_items.append((atom, orb))
+
+        if len(atom_orb_items) != self.active_orbital:
+            raise ValueError(
+                f"Calculated active orbital count ({len(atom_orb_items)}) does not match "
+                f"expected active orbital count ({self.active_orbital}). Check GVB orbital labels."
+            )
+
+        if atom_order_list:
+            ordered_atom_orb_items: List[Tuple[int, np.ndarray]] = []
+            for atom in atom_order_list:
+                for i, item in enumerate(atom_orb_items):
+                    if item[0] == atom:
+                        ordered_atom_orb_items.append(atom_orb_items.pop(i))
+                        break
+            atom_orb_items = ordered_atom_orb_items + atom_orb_items
+
+        head_text = (' ' + str(orbital_matrix.shape[1])) * len(atom_orb_items)
+        orb_text = ''
+        for i, (atom, orb) in enumerate(atom_orb_items):
+            orb_text += f'# ACTIVE ORBITAL        {i+1}  NAO =    {len(orb)} Localization in atom {atom}{self.mol.atom_pure_symbol(atom-1)}\n'
+            orb_text += make_xmvb_format_text(orb, per_line=4)
+            orb_text += '\n'
+        return head_text, orb_text
+
+    def get_init_guess_total(self, active_order: List[int]) -> str:
+        """
+        获取完整 `$gus` 初猜文本，顺序是非活性轨道在前、活性轨道在后。
+
+        Args:
+            active_order: 活性原子顺序。
+
+        Returns:
+            str: `$gus` 区块正文。
+        """
+        inact_head, inact_guess = self.get_init_guess_inactive(self.inactive_orbital_matrix)
+        act_head, act_guess = self.get_init_guess_active(
+            self.active_orbital_matrix,
+            self.active_orb_atom,
+            active_order,
+        )
+        return inact_head + act_head + '\n' + inact_guess + act_guess.strip("\n")
+
+    def get_active_orb_atom_order(self, atom_list: List[List[int]]) -> List[int]:
+        """
+        根据 `active_order` 设置生成活性 `$orb` 行使用的原子顺序。
+
+        Args:
+            atom_list: 活性轨道原子贡献列表。
+
+        Returns:
+            List[int]: 活性原子顺序。
+        """
+        orb_atom_list = [atom for orb_atom in atom_list for atom in orb_atom]
+        active_order = self.input_data.vbsettings.active_order if self.input_data is not None else "seq"
+
+        if self.input_data is not None and self.input_data.vbsettings.aoa and active_order == 'aoa':
+            return self._complete_active_order(list(self.input_data.vbsettings.aoa), orb_atom_list)
+        if active_order == 'seq':
+            return sorted(orb_atom_list)
+        if active_order == 'rumer':
+            logger.info("Active order setting is 'rumer', determining active orbital atom order based on Rumer graph...")
+            return self._complete_active_order(self.get_rumer_order(orb_atom_list), orb_atom_list)
+        return orb_atom_list
+
+    def _complete_active_order(self, preferred_order: List[int], atom_list: List[int]) -> List[int]:
+        """
+        用推荐顺序重排活性原子，同时保留重复原子和没有被推荐顺序覆盖的原子。
+
+        Args:
+            preferred_order: 推荐的活性原子顺序。
+            atom_list: 实际需要输出的活性原子列表，允许重复。
+
+        Returns:
+            List[int]: 长度和 `atom_list` 一致的活性原子顺序。
+        """
+        remaining = list(atom_list)
+        completed_order: List[int] = []
+        for atom in preferred_order:
+            if atom in remaining:
+                completed_order.append(atom)
+                remaining.remove(atom)
+        completed_order.extend(remaining)
+        return completed_order
+
+    def get_rumer_order(self, active_atoms: List[int]) -> List[int]:
+        """
+        按 Rumer 图推断活性原子顺序。
+
+        Args:
+            active_atoms: 活性原子索引列表，从 1 开始。
+
+        Returns:
+            List[int]: Rumer 图推断后的原子顺序。
+        """
+        from ..utils.rumer_active_graph import (
+            infer_active_atom_order,
+            print_order_process_en,
+            write_active_graph_topology_svg,
+        )
+
+        num_atoms = self.mol.natm
+        xyz_block = f"{num_atoms}\n\n{self.geometry_text}"
+        charge = self.input_data.charge if self.input_data is not None else self.mol.charge
+        result = infer_active_atom_order(
+            xyz_block,
+            active_atoms,
+            charge=charge,
+            hide_hydrogens=False,
+        )
+        if self.input_data is not None and self.input_data.vbsettings.draw_rumer:
+            svg_file = write_active_graph_topology_svg(result, Path.cwd(), f'{self.origin_filename}_rumer_graph.svg')
+            logger.info(f"Active graph topology SVG: {svg_file.resolve()}")
+        logger.info(f"Rumer Active Graph: Final order(atom indices): {result.final_order}")
+        if self.input_data is not None and self.input_data.debug:
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                print_order_process_en(result)
+            order_process = buffer.getvalue().rstrip()
+            if order_process:
+                logger.debug(order_process)
+        return result.final_order
+
     def get_xmidata(self) -> 'XMIData':
         """
         将已读取的 GVB 数据转换成 XMIData。
 
-        这个接口先占位，目的是让类的对外形状和 XMVBNBO 对齐。后续真正实现时，
-        会在这里组装 `$orb`、`$geo` 和 `$gus` 等 XMVB 输入区块。
-
         Raises:
-            NotImplementedError: 当前还没有实现 GVB 到 XMIData 的完整转换。
+            ValueError: 当初始化时没有传入 autoVB input_data 时抛出。
 
         Returns:
-            XMIData: 未来会返回可直接交给 `write_xmi_file` 的数据对象。
+            XMIData: 可直接交给 `write_xmi_file` 的 XMVB 输入数据对象。
         """
-        raise NotImplementedError("GVB output to XMIData conversion is not implemented yet.")
+        vbsetting = self.input_data.vbsettings
+        method = self.input_data.method.lower()
+        iscf = vbsetting.iscf
+        stru_type = vbsetting.stru
+        nae, nao = self.active_electron, self.active_orbital
+
+        logger.info(f"Preparing to generate XMVB input data from GVB with method={method}, nae={nae}, nao={nao}...")
+        if method == 'blw':
+            nae = 2
+            nao = 1
+            stru_type = 'full'
+            method = 'vbscf'
+
+            inactive_head, inactive_text = self.get_orb_section_inactive(self.occ_orb_atom)
+            inactive_text = inactive_text.strip("\n")
+            orb_section = f'{inactive_head}\n{inactive_text}'
+
+            inact_head, inact_guess = self.get_init_guess_inactive(self.occupation_orbital_matrix)
+            init_guess_section = inact_head + '\n' + inact_guess.strip("\n")
+        else:
+            if method == 'lam-dfvb':
+                logger.info("LAM-DFVB method detected, currently only BLYP functional is available.")
+                method = 'lam-dfvb=blyp'
+            if method == 'bovb':
+                logger.info("BOVB method detected, only iscf=2 will be used regardless of user input.")
+                iscf = 2
+
+            active_order = self.get_active_orb_atom_order(self.active_orb_atom)
+            orb_section = self.get_orb_section_total(active_order)
+            init_guess_section = self.get_init_guess_total(active_order)
+
+            if stru_type == 'default':
+                if self.active_orbital > 8:
+                    stru_type = 'cov'
+                else:
+                    stru_type = 'full'
+
+        from ..io.writers import XMIData
+        return XMIData(
+            molecule_name=self.filename,
+            method=method,
+            stru_type=stru_type,
+            int_type=vbsetting.inte,
+            iscf=iscf,
+            nae=nae,
+            nao=nao,
+            ncharge=self.input_data.charge,
+            nmul=self.input_data.spin,
+            basis_set=self.basis_set,
+            sort=vbsetting.sort,
+            orb_section=orb_section,
+            geo_section=self.geometry_text,
+            init_guess_section=init_guess_section,
+        )
 
 
 class GVBGI:
