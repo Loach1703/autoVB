@@ -72,7 +72,7 @@ class MoleculeBondVariantDrawer:
     DEFAULT_LONE_PAIR_DOT_RADIUS = 3.4
     DEFAULT_RADICAL_DOT_RADIUS = 4.0
     ATOM_LABEL_OFFSET = 13.0
-    CHARGE_LABEL_OFFSET = 34.0
+    CHARGE_LABEL_OFFSET = 20.0
     LONE_PAIR_OFFSET = 23.0
     LONE_PAIR_DOT_GAP = 9.0
     CHARGE_NOTE_PROP = "_bondVariantChargeNote"
@@ -609,9 +609,13 @@ class MoleculeBondVariantDrawer:
         )
 
         if self.show_atom_labels:
+            charge_label_offset = self._charge_label_offset(
+                atom_coords,
+                self.DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE * self.charge_note_scale,
+            )
             for atom_idx, atom_coord in enumerate(atom_coords):
                 atom_label_offset = (
-                    -self.CHARGE_LABEL_OFFSET
+                    -charge_label_offset
                     if atom_idx in charge_notes
                     else self.ATOM_LABEL_OFFSET
                 )
@@ -636,6 +640,7 @@ class MoleculeBondVariantDrawer:
         charge_font_size = self.DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE * (
             self.charge_note_scale
         )
+        charge_label_offset = self._charge_label_offset(atom_coords, charge_font_size)
         for atom_idx, note in charge_notes.items():
             atom_coord = atom_coords[atom_idx]
             annotation_parts.append(
@@ -645,7 +650,7 @@ class MoleculeBondVariantDrawer:
                     position=self._label_position(
                         atom_coord,
                         centroid,
-                        self.CHARGE_LABEL_OFFSET,
+                        charge_label_offset,
                         charge_font_size,
                         width,
                         height,
@@ -912,6 +917,69 @@ class MoleculeBondVariantDrawer:
         x_sum = sum(point[0] for point in points)
         y_sum = sum(point[1] for point in points)
         return (x_sum / len(points), y_sum / len(points))
+
+    def _charge_label_offset(
+        self,
+        atom_coords: list[tuple[float, float]],
+        font_size: float,
+    ) -> float:
+        """根据当前分子缩放动态确定电荷标签离原子的距离。
+
+        固定像素偏移在不同分子上容易忽远忽近。这里先用最近邻原子距离
+        估计当前图里的典型键长，再取其中一部分作为电荷偏移，同时用字号
+        设上下限，避免小图贴得太近、大图飘得太远。
+
+        Args:
+            atom_coords: 原子的 SVG 坐标。
+            font_size: 电荷标签字号。
+
+        Returns:
+            电荷标签相对原子的动态偏移距离。
+        """
+        typical_distance = self._typical_nearest_atom_distance(atom_coords)
+        if typical_distance <= 0:
+            return self.CHARGE_LABEL_OFFSET
+
+        raw_offset = typical_distance * 0.30
+        min_offset = font_size * 0.40
+        max_offset = font_size * 0.80
+        return self._clamp(raw_offset, min_offset, max_offset)
+
+    @staticmethod
+    def _typical_nearest_atom_distance(
+        atom_coords: list[tuple[float, float]],
+    ) -> float:
+        """估计当前图里相邻原子的典型距离。
+
+        Args:
+            atom_coords: 原子的 SVG 坐标。
+
+        Returns:
+            最近邻距离的中位数；原子数不足时返回 0。
+        """
+        if len(atom_coords) < 2:
+            return 0.0
+
+        nearest_distances: list[float] = []
+        for i, (x1, y1) in enumerate(atom_coords):
+            distances = []
+            for j, (x2, y2) in enumerate(atom_coords):
+                if i == j:
+                    continue
+                distance = math.hypot(x1 - x2, y1 - y2)
+                if distance > 1.0:
+                    distances.append(distance)
+            if distances:
+                nearest_distances.append(min(distances))
+
+        if not nearest_distances:
+            return 0.0
+
+        nearest_distances.sort()
+        middle = len(nearest_distances) // 2
+        if len(nearest_distances) % 2:
+            return nearest_distances[middle]
+        return (nearest_distances[middle - 1] + nearest_distances[middle]) / 2.0
 
     @classmethod
     def _label_position(
