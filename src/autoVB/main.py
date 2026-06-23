@@ -1452,7 +1452,7 @@ class autoVBMain:
             method='GVB',
             mem=self.input_data.mem,
             nproc=self.input_data.nproc,
-            mokit_keywords='cart'
+            # mokit_keywords='cart'
         )
         logger.info(f"Wrote MOKIT automr GVB input file to {self.automr_gvb_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 

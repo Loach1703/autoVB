@@ -2,8 +2,6 @@ from pathlib import Path
 import re
 import os
 import io
-import shutil
-import subprocess
 from datetime import datetime
 from collections import Counter
 from contextlib import redirect_stdout
@@ -74,7 +72,7 @@ class XMVBGVB:
         Returns:
             None
         """
-        # GVB 主要靠 fch 读轨道，靠 .gms 读 pair 表。
+        # fch 主要负责给我们尺寸、占据数和 mol；真正写 XMVB 初猜的轨道后面会换成 _new.dat。
         self.fch_path = Path(fch_path)
         if not self.fch_path.is_file():
             raise FileNotFoundError(f"GVB fch file not found: {self.fch_path}")
@@ -89,7 +87,9 @@ class XMVBGVB:
         self.origin_filename = self.filename
         self.mol = self._load_mol()
         self.cf_dat_path: Optional[Path] = None
-        self.cf_fch_path: Optional[Path] = None
+        self.ndb: int = 0
+        self.nopen: int = 0
+        self.gvb_pair_start_index: int = 0
 
         self.basis_set = input_data.basis if input_data is not None else ""
         self.geometry_text = pyscf_to_xyz(self.mol)
@@ -104,9 +104,13 @@ class XMVBGVB:
         self.nbf: Optional[int] = None
         self.nif: Optional[int] = None
         self.mo_coeff: Optional[np.ndarray] = None
+        self.fch_raw_orbital_matrix: Optional[np.ndarray] = None
+        self.fch_orbital_matrix: Optional[np.ndarray] = None
+        self.fch_occupation_numbers: Optional[np.ndarray] = None
         self.raw_orbital_matrix: Optional[np.ndarray] = None
         self.orbital_matrix: Optional[np.ndarray] = None
         self.occupation_numbers: Optional[np.ndarray] = None
+        self.cf_raw_orbital_matrix: Optional[np.ndarray] = None
         self.gvb_orbital_atoms: Optional[list[list[int]]] = None
         self.orbital_atoms: Optional[list[list[int]]] = None
         self.pair_information: Optional[np.ndarray] = None
@@ -228,46 +232,98 @@ class XMVBGVB:
         """
         self.read_fch_orbitals(self.fch_path)
         self.read_pair_information()
-        self.cf_fch_path = self.prepare_cf_orbitals()
+        self.prepare_cf_orbitals()
+        self.read_cf_dat_orbitals()
 
     def prepare_cf_orbitals(self) -> Path:
         """
-        尝试生成 Coulson-Fischer 轨道并写入新的 fch 文件。
+        生成 Coulson-Fischer 轨道对应的 `_new.dat`。
 
         MOKIT 的 `gen_cf_orb` 只能处理 GAMESS `.dat`，会生成 `xxx_new.dat`；
-        如果后面想像普通 fch 一样读取或可视化这些 CF 轨道，还需要再调用
-        `dat2fch xxx_new.dat xxx_cf.fch` 把轨道写进 fch。这个函数成功时返回
-        新的 `xxx_cf.fch`，失败时保留原始 GVB natural orbital fch。
+        这份 `_new.dat` 是后面写 XMVB 初猜的主要轨道来源。
 
         Returns:
-            Path: 实际用于后续读取轨道的 fch 文件路径。
+            Path: 生成的 `xxx_new.dat` 路径。
         """
         from mokit.lib.lo import gen_cf_orb
         npair = self.pair_information.shape[0]
-        nopen = int(getattr(self.mol, "spin", 0))
-        ndb = int(self.mol.nelec[0] - npair - nopen)
-        dat2fch_exe = shutil.which("dat2fch")
+        self.nopen = int(getattr(self.mol, "spin", 0))
+        self.ndb = int(self.mol.nelec[0] - npair - self.nopen)
+        self.gvb_pair_start_index = self.ndb + self.nopen
 
-        gen_cf_orb(datname=str(self.dat_path), ndb=ndb, nopen=nopen)
+        gen_cf_orb(datname=str(self.dat_path), ndb=self.ndb, nopen=self.nopen)
 
         self.cf_dat_path = self.dat_path.with_name(f"{self.dat_path.stem}_new.dat")
-        self.cf_fch_path = self.original_fch_path.with_name(f"{self.original_fch_path.stem}_cf.fch")
-        shutil.copy2(self.original_fch_path, self.cf_fch_path)
-        proc = subprocess.run(
-            [dat2fch_exe, str(self.cf_dat_path), str(self.cf_fch_path)],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        logger.info("Generated Coulson-Fischer orbital dat %s.", self.cf_dat_path)
+        return self.cf_dat_path
+
+    def read_cf_dat_orbitals(self) -> np.ndarray:
+        """
+        从 MOKIT `gen_cf_orb` 生成的 `_new.dat` 里读取 CF/GI 轨道。
+
+        这一步是给 XMVB 初猜用的关键读取：`_new.dat` 中的 `$VEC` 和
+        GAMESS 输出里的 `GI ORBITALS` 是同一套轨道，保持了 XMVB 需要的
+        GAMESS 基函数坐标系。相比之下，`fch2py` 会把系数转成 PySCF 坐标系，
+        不适合直接写 `$gus`。
+
+        Returns:
+            np.ndarray: 形状为 `(轨道数, 基函数数)` 的 `_new.dat` 轨道矩阵。
+        """
+        if self.cf_dat_path is None:
+            self.cf_dat_path = self.dat_path.with_name(f"{self.dat_path.stem}_new.dat")
+        if not self.cf_dat_path.is_file():
+            raise FileNotFoundError(f"GVB Coulson-Fischer dat file not found: {self.cf_dat_path}")
+
+        dat_text = read_gamess_dat(self.cf_dat_path)
+        self.cf_raw_orbital_matrix = read_dat_orbital(dat_text)
+        if self.nbf is not None and self.cf_raw_orbital_matrix.shape[1] != self.nbf:
+            raise ValueError(
+                f"CF dat orbital basis size ({self.cf_raw_orbital_matrix.shape[1]}) "
+                f"does not match fch basis size ({self.nbf})."
+            )
+
+        # raw_orbital_matrix 保留 _new.dat 原始列顺序，适合按原子切片做贡献分析。
+        self.raw_orbital_matrix = self.cf_raw_orbital_matrix.copy()
+        # orbital_matrix 是真正写 XMVB 初猜的矩阵；这里按 XMVB 的 D/F 约定调整列顺序。
+        self.orbital_matrix = self.cf_raw_orbital_matrix.copy()
+        self._change_orbital_order()
+        self.occupation_numbers = self._build_cf_dat_occupation_numbers(self.orbital_matrix.shape[0])
 
         logger.info(
-            "Generated Coulson-Fischer orbital fch %s from %s.",
-            self.cf_fch_path,
+            "Read Coulson-Fischer orbitals from %s: orbitals=%s, nbf=%s",
             self.cf_dat_path,
+            self.orbital_matrix.shape[0],
+            self.orbital_matrix.shape[1],
         )
+        return self.orbital_matrix
 
-        return self.cf_fch_path
+    def _build_cf_dat_occupation_numbers(self, norb: int) -> np.ndarray:
+        """
+        按 `_new.dat` 的轨道顺序构造占据数数组。
+
+        `_new.dat` 的顺序是：`ndb` 条闭壳层轨道、`nopen` 条开壳层轨道，
+        然后每个 GVB pair 连续两条 CF 轨道。pair 的两条占据数直接来自
+        `PAIR INFORMATION`。
+
+        Args:
+            norb: `_new.dat` 中的轨道总数。
+
+        Returns:
+            np.ndarray: 和 `_new.dat` 轨道顺序一致的一维占据数数组。
+        """
+        occ = np.zeros(norb)
+        occ[:self.ndb] = 2.0
+        if self.nopen:
+            occ[self.ndb:self.ndb + self.nopen] = 1.0
+
+        for pair_pos, pair in enumerate(self.pair_information):
+            first = self.gvb_pair_start_index + 2 * pair_pos
+            second = first + 1
+            if second >= norb:
+                break
+            occ[first] = float(pair[5])
+            occ[second] = float(pair[6])
+        return occ
 
     def read_fch_orbitals(self, fchname:str) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -288,12 +344,13 @@ class XMVBGVB:
         # nbf/nif 是 fch2py 必须要的尺寸信息，先读出来再取 MO 系数。
         self.nbf, self.nif = read_nbf_and_nif_from_fch(fchname)
         self.mo_coeff: np.ndarray = fch2py(fchname, self.nbf, self.nif, "a")
-        # raw_orbital_matrix 保留 PySCF/MOKIT 原始 AO 顺序，适合做原子贡献分析。
-        self.raw_orbital_matrix: np.ndarray = self.mo_coeff.T.copy()
-        # orbital_matrix 会按 XMVB 的 D/F 轨道顺序重排，适合后面写初猜。
-        self.orbital_matrix: np.ndarray = self.raw_orbital_matrix.copy()
-        self._change_orbital_order()
-        self.occupation_numbers: np.ndarray = read_eigenvalues_from_fch(fchname, self.nif, "a")
+        # fch2py 的矩阵保留下来做参考；后面写 XMVB 初猜会被 _new.dat 轨道覆盖。
+        self.fch_raw_orbital_matrix: np.ndarray = self.mo_coeff.T.copy()
+        self.fch_orbital_matrix: np.ndarray = self.fch_raw_orbital_matrix.copy()
+        self.fch_occupation_numbers: np.ndarray = read_eigenvalues_from_fch(fchname, self.nif, "a")
+        self.raw_orbital_matrix = self.fch_raw_orbital_matrix.copy()
+        self.orbital_matrix = self.fch_orbital_matrix.copy()
+        self.occupation_numbers = self.fch_occupation_numbers.copy()
         logger.info(
             "Read GVB orbitals from %s: nbf=%s, nif=%s",
             self.fch_path,
@@ -347,16 +404,34 @@ class XMVBGVB:
             tuple[np.ndarray, np.ndarray]: `(occupation_orbital_matrix, virtual_orbital_matrix)`。
         """
 
-        # 按总电子数向上取整，得到占据轨道数量。
-        self.nocc = int((self.mol.nelectron + 1) // 2)
-        self.occupation_orbital_matrix = self.orbital_matrix[:self.nocc]
-        self.virtual_orbital_matrix = self.orbital_matrix[self.nocc:]
-        self.occ_occupation_numbers = self.occupation_numbers[:self.nocc]
-        self.virtual_occupation_numbers = self.occupation_numbers[self.nocc:]
-        self.occ_orb_atom = self.orbital_atoms[:self.nocc]
-        self.vir_orb_atom = self.orbital_atoms[self.nocc:]
-        self.occ_indices = list(range(self.nocc))
-        self.vir_indices = list(range(self.nocc, self.orbital_matrix.shape[0]))
+        # _new.dat 不是“先所有占据再所有虚轨道”的顺序，而是：
+        # 闭壳层/开壳层轨道在前，随后每个 GVB pair 连续两条 CF 轨道。
+        # 因此占据代表轨道要显式取每个 pair 的第一条，虚轨道代表取第二条。
+        expected_pair_end = self.gvb_pair_start_index + 2 * self.gvb_pair_count
+        if expected_pair_end > self.orbital_matrix.shape[0]:
+            raise ValueError(
+                f"CF dat orbital count ({self.orbital_matrix.shape[0]}) is too small for "
+                f"ndb={self.ndb}, nopen={self.nopen}, pairs={self.gvb_pair_count}."
+            )
+
+        self.occ_indices = list(range(self.gvb_pair_start_index))
+        self.occ_indices.extend(
+            self.gvb_pair_start_index + 2 * pair_pos
+            for pair_pos in range(self.gvb_pair_count)
+        )
+        self.vir_indices = [
+            self.gvb_pair_start_index + 2 * pair_pos + 1
+            for pair_pos in range(self.gvb_pair_count)
+        ]
+        self.vir_indices.extend(range(expected_pair_end, self.orbital_matrix.shape[0]))
+
+        self.nocc = len(self.occ_indices)
+        self.occupation_orbital_matrix = self.orbital_matrix[self.occ_indices]
+        self.virtual_orbital_matrix = self.orbital_matrix[self.vir_indices]
+        self.occ_occupation_numbers = self.occupation_numbers[self.occ_indices]
+        self.virtual_occupation_numbers = self.occupation_numbers[self.vir_indices]
+        self.occ_orb_atom = [self.orbital_atoms[i] for i in self.occ_indices]
+        self.vir_orb_atom = [self.orbital_atoms[i] for i in self.vir_indices]
 
         logger.info(
             "Split GVB orbitals: nocc=%s, occupied=%s, virtual=%s",
@@ -416,8 +491,16 @@ class XMVBGVB:
 
         from scipy.optimize import linear_sum_assignment
 
-        # 用 raw_orbital_matrix 是因为它还没有做 XMVB 的 D/F 列顺序变换，和 PySCF 的原子 AO 切片正好对得上。
-        atom_contribution_matrix = self.get_atom_contribution_matrix(self.raw_orbital_matrix[:self.nocc])
+        # 用 raw_orbital_matrix 是因为它还没有做 XMVB 的 D/F 列顺序变换，和 GI/dat 的原始列标签正好对得上。
+        # 对 GVB pair，匹配标签时要把同一 pair 的两条 CF 轨道合起来看；只看第一条会偏向单原子标签。
+        all_atom_contribution_matrix = self.get_atom_contribution_matrix(self.raw_orbital_matrix)
+        atom_contribution_matrix = np.zeros((self.nocc, self.mol.natm))
+        for occ_pos, orbital_index in enumerate(self.occ_indices):
+            atom_contribution_matrix[occ_pos] = all_atom_contribution_matrix[orbital_index]
+            if orbital_index >= self.gvb_pair_start_index:
+                pair_offset = orbital_index - self.gvb_pair_start_index
+                if pair_offset % 2 == 0 and orbital_index + 1 < all_atom_contribution_matrix.shape[0]:
+                    atom_contribution_matrix[occ_pos] += all_atom_contribution_matrix[orbital_index + 1]
         score_matrix = np.zeros((self.nocc, self.nocc))
         for label_index, atoms in enumerate(input_orbital_atoms):
             atom_indices = [atom - 1 for atom in atoms]
@@ -438,8 +521,10 @@ class XMVBGVB:
             self.gvb_to_orbital_atom_scores[int(gvb_index)] = score_matrix[int(gvb_index), int(label_index)]
 
         self.occ_orb_atom = matched_orbital_atoms
-        self.orbital_atoms = self.occ_orb_atom + self.gvb_orbital_atoms[self.nocc:]
-        self.vir_orb_atom = self.orbital_atoms[self.nocc:]
+        self.orbital_atoms = [list(atoms) for atoms in self.gvb_orbital_atoms]
+        for occ_pos, orbital_index in enumerate(self.occ_indices):
+            self.orbital_atoms[orbital_index] = list(matched_orbital_atoms[occ_pos])
+        self.vir_orb_atom = [self.orbital_atoms[i] for i in self.vir_indices]
 
         logger.info(
             "Matched %s orbital atom labels to occupied GVB orbitals one-to-one.",
@@ -460,7 +545,7 @@ class XMVBGVB:
         Returns:
             tuple[np.ndarray, np.ndarray]: `(active_orbital_matrix, inactive_orbital_matrix)`。
         """
-        occ_numbers = self.occupation_numbers[:self.nocc]
+        occ_numbers = self.occ_occupation_numbers
         self.active_indices = np.where(occ_numbers < threshold)[0].tolist()
         self.inactive_indices = np.where(occ_numbers >= threshold)[0].tolist()
 
@@ -508,10 +593,9 @@ class XMVBGVB:
         Returns:
             np.ndarray: 只保留指定原子 AO 系数的新轨道。
         """
-        slices = self.mol.aoslice_by_atom()
         new_orb = np.zeros_like(orbital)
-        a0, a1 = slices[atom_index - 1][2], slices[atom_index - 1][3]
-        new_orb[a0:a1] = orbital[a0:a1]
+        basis_indices = self._atom_basis_indices(len(orbital), atom_index)
+        new_orb[basis_indices] = orbital[basis_indices]
         return new_orb
 
     def get_orb_section_inactive(self, atom_list: List[List[int]]) -> Tuple[str, str]:
@@ -604,13 +688,21 @@ class XMVBGVB:
         Returns:
             Tuple[str, str]: `(头文本, 活性轨道系数文本)`。
         """
+        # 每一项是 (atom_index, orbital_vector)
         atom_orb_items: List[Tuple[int, np.ndarray]] = []
-        for orb, oac_item in zip(orbital_matrix, atom_list):
-            for atom in oac_item:
+        for active_pos, (orb, oac_item) in enumerate(zip(orbital_matrix, atom_list)):
+            pair_orbitals = self.get_active_pair_orbitals(active_pos)
+            if pair_orbitals is not None and len(oac_item) == pair_orbitals.shape[0]:
+                orbitals_for_atoms = self.order_pair_orbitals_by_atoms(pair_orbitals, oac_item)
+            else:
+                # 找不到 pair 的两条轨道时，保留旧逻辑：同一条活性轨道按原子标签展开。
+                orbitals_for_atoms = np.repeat(orb[np.newaxis, :], len(oac_item), axis=0)
+
+            for atom, atom_orb in zip(oac_item, orbitals_for_atoms):
                 if self.input_data is not None and self.input_data.vbsettings.atom_slice:
-                    atom_orb_items.append((atom, self.get_atom_sliced_orbital(orb, atom)))
+                    atom_orb_items.append((atom, self.get_atom_sliced_orbital(atom_orb, atom)))
                 else:
-                    atom_orb_items.append((atom, orb))
+                    atom_orb_items.append((atom, atom_orb))
 
         if len(atom_orb_items) != self.active_orbital:
             raise ValueError(
@@ -634,6 +726,77 @@ class XMVBGVB:
             orb_text += make_xmvb_format_text(orb, per_line=4)
             orb_text += '\n'
         return head_text, orb_text
+
+    def get_active_pair_orbitals(self, active_pos: int) -> Optional[np.ndarray]:
+        """
+        取出某条活性 GVB pair 的两条轨道。
+
+        现在主要轨道矩阵来自 `_new.dat`，它的顺序更直接：闭壳层/开壳层后，
+        每个 GVB pair 都是连续两条 CF 轨道。因此只要知道当前活性轨道
+        对应的是第几个 pair，就可以直接取出这一对轨道。
+
+        Args:
+            active_pos: 当前活性 GVB 轨道在 `self.active_indices` 里的位置。
+
+        Returns:
+            Optional[np.ndarray]: 找到时返回形状为 `(2, nbf)` 的轨道矩阵；
+            找不到 pair 信息时返回 None。
+        """
+        if active_pos >= len(self.active_indices):
+            return None
+
+        occ_pos = self.active_indices[active_pos]
+        orbital_index = self.occ_indices[occ_pos]
+        if orbital_index < self.gvb_pair_start_index:
+            return None
+
+        pair_pos = (orbital_index - self.gvb_pair_start_index) // 2
+        pair_first = self.gvb_pair_start_index + 2 * pair_pos
+        pair_indices = [pair_first, pair_first + 1]
+        if any(index < 0 or index >= self.orbital_matrix.shape[0] for index in pair_indices):
+            logger.warning(
+                "GVB pair orbitals %s are outside orbital matrix with %s rows.",
+                [index + 1 for index in pair_indices],
+                self.orbital_matrix.shape[0],
+            )
+            return None
+        return self.orbital_matrix[pair_indices]
+
+    def order_pair_orbitals_by_atoms(
+        self,
+        pair_orbitals: np.ndarray,
+        atom_list: List[int],
+    ) -> np.ndarray:
+        """
+        按原子贡献把 pair 的两条轨道分配给两个原子标签。
+
+        GAMESS pair 的 ORB1/ORB2 顺序不一定等于 `[atom1, atom2]` 的顺序。
+        这里用很直接的平方系数贡献来判断：哪个轨道落在某个原子上的贡献大，
+        就优先分给那个原子。两轨道两原子的情况只需要比较两种排列。
+
+        Args:
+            pair_orbitals: pair 的两条轨道，形状通常是 `(2, nbf)`。
+            atom_list: 当前活性标签中的两个原子编号。
+
+        Returns:
+            np.ndarray: 已按 `atom_list` 顺序排好的 pair 轨道矩阵。
+        """
+        if pair_orbitals.shape[0] != 2 or len(atom_list) != 2:
+            return pair_orbitals
+
+        contribution_matrix = self.get_atom_contribution_matrix(pair_orbitals)
+        atom_indices = [atom - 1 for atom in atom_list]
+        direct_score = (
+            contribution_matrix[0, atom_indices[0]]
+            + contribution_matrix[1, atom_indices[1]]
+        )
+        swapped_score = (
+            contribution_matrix[1, atom_indices[0]]
+            + contribution_matrix[0, atom_indices[1]]
+        )
+        if swapped_score > direct_score:
+            return pair_orbitals[[1, 0]]
+        return pair_orbitals
 
     def get_init_guess_total(self, active_order: List[int]) -> str:
         """
