@@ -1449,7 +1449,7 @@ class autoVBMain:
         write_automr(
             mol,
             self.automr_gvb_name,
-            method='GVB',
+            method='CASSCF',
             mem=self.input_data.mem,
             nproc=self.input_data.nproc,
             # mokit_keywords='cart'
