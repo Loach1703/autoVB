@@ -82,7 +82,7 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
     if xmidata.sort and "sort" not in extra_keys:
         ctrl_lines.append('sort')
     ctrl_text = "\n".join(ctrl_lines)
-
+    
     xmi_text = f'''{xmidata.molecule_name} Created by autoVB {datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
 $ctrl
 {ctrl_text}
