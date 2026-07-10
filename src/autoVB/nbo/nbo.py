@@ -372,11 +372,12 @@ class XMVBNBO:
     def auto_select_active_space_default(self, auto_set=False) -> tuple[int, int, List[int]]:
         '''
         默认选择活性空间的方式，目标轨道为：
-        1. BD轨道，成键占据数小于1.96的轨道
-        2. BD轨道，成键小于1.99，同时反键大于0.06，（这个类型可以称为BD-BD*）
-        3. LP轨道，占据数小于1.96的轨道
-        4. 如果BD轨道数小于等于5，则选入所有BD轨道，LP轨道仍按阈值判断
-        5. 如果按照上述规则无法选到任何活性空间（这代表所有轨道都接近双占），则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.002的方式选择活性轨道
+        1. 如果BD轨道数小于等于5，则选入所有BD轨道，LP轨道仍按阈值判断
+        2. BD轨道，成键占据数小于1.96的轨道
+        3. BD轨道，成键小于1.99，同时反键大于0.06，（这个类型可以称为BD-BD*）
+        4. LP轨道，占据数小于1.96的轨道
+        5. 如果BD轨道数小于等于5，则选入所有BD轨道，LP轨道仍按阈值判断
+        6. 如果按照上述规则无法选到任何活性空间（这代表所有轨道都接近双占），则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.002的方式选择活性轨道
         Args:
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
         Returns:
@@ -432,6 +433,7 @@ class XMVBNBO:
                 "LP": [],
             }
 
+            # 如果 BD 轨道数小于等于5，则选入所有 BD 轨道，LP 轨道仍按阈值判断
             bd_orbitals = [orbital for orbital in self.nbo_parser.nbo_data if orbital.orbital_type == "BD"]
             if len(bd_orbitals) <= 5:
                 for orbital in bd_orbitals:
@@ -892,19 +894,42 @@ class XMVBNBO:
         
         # 每个BD轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个BD轨道对应 nao + 2
         # 每个LP轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个LP轨道对应 nao + 1
-        # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection的长度
-        
-        for idx in active_indices:
-            occupancy = nbo_data[idx].occupancy
-            if occupancy > 1.5:
-                nae += 2
-            elif 0.2 < occupancy <= 1.5:
-                nae += 1
-            else:
-                pass
-            nao += len(nbo_data[idx].connection)
-            if self.input_data.debug:
-                logger.debug(f"AOI orbital index {idx}: occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
+        # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection 的长度
+        # 如果自旋多重度大于0，则还进行了U的计算，需要用一套不同的规则来计算 NAE 和 NAO
+
+        if self.mol.spin > 0:
+            for idx in active_indices:
+                occupancy = nbo_data[idx].occupancy
+                orbital_type = nbo_data[idx].orbital_type
+                if orbital_type in ["BD", "BD*"]:
+                    if occupancy > 0.9:
+                        nae += 2
+                    elif 0.2 < occupancy <= 0.9:
+                        nae += 1
+                    else:
+                        pass
+                elif orbital_type in ["LP", "LP*"]:
+                    if occupancy > 0.9:
+                        nae += 2
+                    elif 0.2 < occupancy <= 0.9:
+                        nae += 1
+                    else:
+                        pass
+                nao += len(nbo_data[idx].connection)
+                if self.input_data.debug:
+                    logger.debug(f"AOI orbital index {idx}(Unrestricted): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
+        else:
+            for idx in active_indices:
+                occupancy = nbo_data[idx].occupancy
+                if occupancy > 1.5:
+                    nae += 2
+                elif 0.2 < occupancy <= 1.5:
+                    nae += 1
+                else:
+                    pass
+                nao += len(nbo_data[idx].connection)
+                if self.input_data.debug:
+                    logger.debug(f"AOI orbital index {idx}(Restricted): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
         if self.input_data.debug:
             logger.debug(f"Deriving active space from AOI: provided orbital indices (0-based) = {active_indices}")
             logger.debug(f"Derived active space from AOI: {nae} electrons / {nao} orbitals.")

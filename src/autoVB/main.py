@@ -265,6 +265,15 @@ class autoVBMain:
         basis = self.input_data.basis
         charge = self.input_data.charge
         spin = self.input_data.spin
+        method = self.input_data.vbsettings.nbo
+        # 电子数
+        if spin == 1:
+            pass
+        elif spin % 2 == 0:
+            pass
+        elif spin > 1 and spin % 2 == 1:
+            spin = 1
+            logger.info(f"Spin multiplicity {self.input_data.spin} is odd and greater than 1, use R {method} not U{method} for NBO calculation.")
         mol = gto.M(
             atom=self.input_data.geometry,
             basis=basis,
@@ -272,7 +281,7 @@ class autoVBMain:
             spin=spin - 1,  # Gaussian的自旋多重度是2S+1，而pyscf的spin是2S
         )
         from .io.writers import write_gjf_nbo_file
-        write_gjf_nbo_file(mol, self.nbo_gjf_name, method=self.input_data.vbsettings.nbo, mem=self.input_data.mem, nproc=self.input_data.nproc)
+        write_gjf_nbo_file(mol, self.nbo_gjf_name, method=method, mem=self.input_data.mem, nproc=self.input_data.nproc)
         logger.info(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
     def generate_automr_gvb(self):
@@ -292,7 +301,7 @@ class autoVBMain:
             method='GVB',
             mem=self.input_data.mem,
             nproc=self.input_data.nproc,
-            # mokit_keywords='cart'
+            # mokit_keywords="ist=1"
         )
         logger.info(f"Wrote MOKIT automr GVB input file to {self.automr_gvb_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 

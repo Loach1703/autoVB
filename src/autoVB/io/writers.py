@@ -140,7 +140,7 @@ def write_automr(
     mol: 'gto.Mole',
     filename: str,
     method: str = 'GVB',
-    mem: str = '4GB',
+    mem: str = '8GB',
     nproc: int = 4,
     mokit_keywords: str = '',
 ):
@@ -155,6 +155,9 @@ def write_automr(
         mokit_keywords (str): 额外的MOKIT关键词字符串，例如"GVB_prog=GAMESS"，默认为空
     '''
     from ..utils.utils import pyscf_to_xyz
+    # automr要求内存至少为nproc的两倍，否则会阻止计算
+    if int(mem[:-2]) < 2 * nproc:
+        raise ValueError(f"GVB calculation requires at least {2 * nproc}GB memory(at least twice the number of processors). Please increase the memory allocation.")
     geometry_text = pyscf_to_xyz(mol)
     gaussian_basis = to_gaussian_basis_name(mol.basis)
     mokit_line = f"mokit{{{mokit_keywords}}}" if mokit_keywords else "mokit{}"
