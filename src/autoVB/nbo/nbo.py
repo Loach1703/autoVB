@@ -375,8 +375,8 @@ class XMVBNBO:
         1. 如果BD轨道数小于等于5，则选入所有BD轨道，LP轨道仍按阈值判断
         2. BD轨道，成键占据数小于1.96的轨道
         3. BD轨道，成键小于1.99，同时反键大于0.06，（这个类型可以称为BD-BD*）
-        4. LP轨道，占据数小于1.96的轨道
-        5. 如果BD轨道数小于等于5，则选入所有BD轨道，LP轨道仍按阈值判断
+        4. BD反键占据数大于0.12时，选入其对应的BD轨道
+        5. LP轨道，占据数小于1.96的轨道
         6. 如果按照上述规则无法选到任何活性空间（这代表所有轨道都接近双占），则转入auto_select_active_space_iter方法，通过最小大于1的占据数+0.002的方式选择活性轨道
         Args:
             auto_set (bool): 是否自动将选择的活性空间设置，默认False
@@ -389,6 +389,8 @@ class XMVBNBO:
         threshold_bd_bonding_star_min = 1.9
         threshold_bd_antibonding = 0.06
         threshold_bd_antibonding_min = 0.15
+        threshold_strong_antibonding = 0.12
+        threshold_strong_antibonding_max = 0.3
         threshold_lp = 1.96
         threshold_lp_min = 1.9
         if self.mol.spin > 0:
@@ -423,6 +425,7 @@ class XMVBNBO:
             bd_bonding_threshold: float,
             bd_bonding_star_threshold: float,
             bd_antibonding_threshold: float,
+            strong_antibonding_threshold: float,
             lp_threshold: float,
         ) -> tuple[int, int, List[int], List[Dict]]:
             selected_orbitals: Dict[int, Dict] = {}
@@ -430,6 +433,7 @@ class XMVBNBO:
                 "BD-small": [],
                 "BD": [],
                 "BD-BD*": [],
+                "BD*-strong": [],
                 "LP": [],
             }
 
@@ -456,6 +460,13 @@ class XMVBNBO:
                     add_orbital(selected_orbitals, pair.bond, reason)
                     rule_hits["BD-BD*"].append(pair.bond.index)
 
+            # 反键占据数较大时，不再要求成键轨道同时满足占据数上限。
+            for pair in self.nbo_parser.bond_antibond_pairs:
+                if pair.antibond.occupancy > strong_antibonding_threshold:
+                    reason = f"BD*>{strong_antibonding_threshold:.3f}"
+                    add_orbital(selected_orbitals, pair.bond, reason)
+                    rule_hits["BD*-strong"].append(pair.bond.index)
+
             # 挑选满足 LP/LP* 轨道占据数小于 lp_threshold 的轨道
             if not nolp:
                 for orbital in self.nbo_parser.nbo_data:
@@ -475,6 +486,7 @@ class XMVBNBO:
                 logger.debug(
                     f"thresholds: BD<{bd_bonding_threshold:.3f}, "
                     f"BD-BD*: BD<{bd_bonding_star_threshold:.3f} and BD*>{bd_antibonding_threshold:.3f}, "
+                    f"BD*-strong>{strong_antibonding_threshold:.3f}, "
                     f"LP<{lp_threshold:.3f}"
                 )
                 logger.debug(f"rule hits before dedupe: {rule_hits}")
@@ -488,6 +500,7 @@ class XMVBNBO:
             threshold_bd_bonding,
             threshold_bd_bonding_star,
             threshold_bd_antibonding,
+            threshold_strong_antibonding,
             threshold_lp,
         )
 
@@ -499,6 +512,7 @@ class XMVBNBO:
         logger.info(
             f"Default thresholds: BD<{threshold_bd_bonding:.3f}, "
             f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+            f"BD*-strong>{threshold_strong_antibonding:.3f}, "
             f"LP<{threshold_lp:.3f}"
         )
         # 如果选择轨道不为空，则打印每个被选中轨道的详细信息，包括轨道编号、类型、占据数、对应原子以及被选中的原因
@@ -524,11 +538,12 @@ class XMVBNBO:
             logger.info("No active orbitals selected by default thresholds.")
 
         # 如果 nae/nao 过多（大于14），则降低活性空间的选择阈值，每次降低0.005，直到 nae/nao 其中之一小于14
-        # 降低阈值的逻辑（1，2，3每一步都尝试重新选取活性空间）：
+        # 降低阈值的逻辑（1-4每一步都尝试重新选取活性空间）：
         # 1. LP轨道，占据数阈值降低0.005（下限为1.9）
         # 2. BD-BD*轨道，成键阈值降低0.001，反键阈值提高0.003（下限为1.9，上限为0.15）
-        # 3. BD轨道，占据数阈值降低0.005（下限为1.9）
-        # 1-3如此循环，直到达到合理的活性空间大小或者所有阈值都降低到下限仍然过大则停止
+        # 3. 强反键规则的占据数阈值提高0.1（上限为0.3）
+        # 4. BD轨道，占据数阈值降低0.005（下限为1.9）
+        # 1-4如此循环，直到达到合理的活性空间大小或者所有阈值都达到边界仍然过大则停止
         while not under_limit(nae, nao):
             changed = False
 
@@ -539,11 +554,13 @@ class XMVBNBO:
                     threshold_bd_bonding,
                     threshold_bd_bonding_star,
                     threshold_bd_antibonding,
+                    threshold_strong_antibonding,
                     threshold_lp,
                 )
                 logger.info(
                     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
                     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
                     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
                 )
                 if under_limit(nae, nao):
@@ -559,11 +576,35 @@ class XMVBNBO:
                     threshold_bd_bonding,
                     threshold_bd_bonding_star,
                     threshold_bd_antibonding,
+                    threshold_strong_antibonding,
                     threshold_lp,
                 )
                 logger.info(
                     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
                     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
+                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                )
+                if under_limit(nae, nao):
+                    break
+
+            if threshold_strong_antibonding < threshold_strong_antibonding_max:
+                threshold_strong_antibonding = min(
+                    threshold_strong_antibonding_max,
+                    round(threshold_strong_antibonding + 0.1, 10),
+                )
+                changed = True
+                nae, nao, active_indices, selected_items = select_orbitals(
+                    threshold_bd_bonding,
+                    threshold_bd_bonding_star,
+                    threshold_bd_antibonding,
+                    threshold_strong_antibonding,
+                    threshold_lp,
+                )
+                logger.info(
+                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
                     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
                 )
                 if under_limit(nae, nao):
@@ -576,11 +617,13 @@ class XMVBNBO:
                     threshold_bd_bonding,
                     threshold_bd_bonding_star,
                     threshold_bd_antibonding,
+                    threshold_strong_antibonding,
                     threshold_lp,
                 )
                 logger.info(
                     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
                     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
                     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
                 )
                 if under_limit(nae, nao):
@@ -892,44 +935,35 @@ class XMVBNBO:
         nae = 0
         nbo_data = self.nbo_parser.nbo_data
         
-        # 每个BD轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个BD轨道对应 nao + 2
-        # 每个LP轨道占据数 > 1 对应 nae + 2，占据数 > 0 且 < 1 对应 nae + 1，每个LP轨道对应 nao + 1
+        # 每个BD轨道占据数 > 1 对应 nae + 2， nao + 2
+        # 每个LP轨道占据数 > 1 对应 nae + 2， nao + 1
         # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection 的长度
-        # 如果自旋多重度大于0，则还进行了U的计算，需要用一套不同的规则来计算 NAE 和 NAO
+
+        nae = 0
+        nao = 0
+
+        for idx in active_indices:
+            orbital = nbo_data[idx]
+            if orbital.orbital_type in ("BD", "LP", "CR"):
+                nae += 2
+            elif orbital.orbital_type in ("BD*", "LP*"):
+                nae += 0
+            elif orbital.orbital_type in ("RY*"):
+                nae += 0
+                logger.warning(f"Orbital {idx} is of type RY*, which is not counted towards active electrons. Please check if this is intended.")
+            nao += len(orbital.connection)
+            if self.input_data.debug:
+                logger.debug(f"AOI orbital index {idx}(spin: {self.mol.spin}): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
 
         if self.mol.spin > 0:
-            for idx in active_indices:
-                occupancy = nbo_data[idx].occupancy
-                orbital_type = nbo_data[idx].orbital_type
-                if orbital_type in ["BD", "BD*"]:
-                    if occupancy > 0.9:
-                        nae += 2
-                    elif 0.2 < occupancy <= 0.9:
-                        nae += 1
-                    else:
-                        pass
-                elif orbital_type in ["LP", "LP*"]:
-                    if occupancy > 0.9:
-                        nae += 2
-                    elif 0.2 < occupancy <= 0.9:
-                        nae += 1
-                    else:
-                        pass
-                nao += len(nbo_data[idx].connection)
-                if self.input_data.debug:
-                    logger.debug(f"AOI orbital index {idx}(Unrestricted): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
-        else:
-            for idx in active_indices:
-                occupancy = nbo_data[idx].occupancy
-                if occupancy > 1.5:
-                    nae += 2
-                elif 0.2 < occupancy <= 1.5:
-                    nae += 1
-                else:
-                    pass
-                nao += len(nbo_data[idx].connection)
-                if self.input_data.debug:
-                    logger.debug(f"AOI orbital index {idx}(Restricted): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
+            nae -= self.mol.spin
+
+        # 判断活性空间是否合法
+        if nae <= 0 or nao <= 0:
+            raise ValueError(f"Derived active space has negative electrons or orbitals: {nae} electrons / {nao} orbitals. Please check the selected active orbital indices and the corresponding occupation numbers.")
+        if nae % 2 != self.mol.spin % 2:
+            raise ValueError(f"Molecule has spin {self.mol.spin}, but active electrons: {nae}. That is impossible.")
+
         if self.input_data.debug:
             logger.debug(f"Deriving active space from AOI: provided orbital indices (0-based) = {active_indices}")
             logger.debug(f"Derived active space from AOI: {nae} electrons / {nao} orbitals.")
