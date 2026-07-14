@@ -1,12 +1,14 @@
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass
 import datetime
+import json
 
 from ..utils.constants import to_gaussian_basis_name
 
 if TYPE_CHECKING:
-    from ..main import XMIPassthrough
+    from ..main import XMIPassthrough, autoVBInputData
+    from .xmo_output_parser import XmoParsedData, XmoStructureWeight
     from pyscf import gto
 
 @dataclass
@@ -114,6 +116,80 @@ $end
 '''
     with open(xmi_path, 'w') as f:
         f.write(xmi_text)
+
+
+def write_json_summary(
+    input_data: 'autoVBInputData',
+    parsed_data: 'XmoParsedData',
+    output: str | Path | None = None,
+) -> Path:
+    """将 XMVB 解析结果写成便于后续处理的 JSON 摘要。
+
+    Args:
+        input_data: autoVB 输入数据，提供分子名称、电荷和自旋多重度。
+        parsed_data: ``XmoParser`` 返回的 XMVB 解析结果。
+        output: JSON 输出路径；不提供时使用 ``<分子名>.json``。
+
+    Returns:
+        写出的 JSON 文件路径。
+    """
+    charge = int(parsed_data.ctrl_options.get("ncharge", input_data.charge))
+    multiplicity = int(parsed_data.ctrl_options.get("nmul", input_data.spin))
+
+    summary = {
+        "molecule": {
+            "name": input_data.filename,
+            "title": input_data.title,
+            "charge": charge,
+            "multiplicity": multiplicity,
+            "geometry": [atom.to_dict() for atom in parsed_data.geo],
+        },
+        "orb": {
+            "nae": parsed_data.nae,
+            "nao": parsed_data.nao,
+            "section": parsed_data.orb,
+            "orbital_to_atom": parsed_data.orbital_to_atom,
+        },
+        "calculation": {
+            "method": parsed_data.method,
+            "basis": parsed_data.basis,
+            "converged": parsed_data.converged,
+            "steps": parsed_data.steps,
+            "energy": parsed_data.energy,
+            "energy_terms": parsed_data.energy_terms,
+        },
+        "structures": _merge_structure_weights(parsed_data),
+    }
+
+    output_path = Path(output) if output else Path(f"{input_data.filename}.json")
+    output_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return output_path
+
+
+def _merge_structure_weights(parsed_data: 'XmoParsedData') -> list[dict[str, Any]]:
+    """按结构序号合并 XMVB 输出中的四套结构权重。"""
+    weight_tables: tuple[tuple[str, list['XmoStructureWeight']], ...] = (
+        ("cc", parsed_data.cc_weights),
+        ("lowdin", parsed_data.lowdin_weights),
+        ("inverse", parsed_data.inverse_weights),
+        ("renormalized", parsed_data.renormalized_weights),
+    )
+    structures: dict[int, dict[str, Any]] = {}
+
+    for weight_name, rows in weight_tables:
+        for row in rows:
+            if row.index not in structures:
+                structure = row.to_dict()
+                structure.pop("weight")
+                structure["structure"] = structure.pop("structure_name")
+                structure["weights"] = {}
+                structures[row.index] = structure
+            structures[row.index]["weights"][weight_name] = row.weight
+
+    return [structures[index] for index in sorted(structures)]
 
 def write_gjf_nbo_file(mol: 'gto.Mole',filename: str, method: str='hf', mem: str='4GB', nproc: int=4):
     from ..utils.utils import pyscf_to_xyz

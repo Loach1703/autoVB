@@ -23,6 +23,7 @@ autovb = "autoVB.cli.autovb:autovb_main"
 autovb_test = "autoVB.cli.autovb_test:autovb_test"
 draw_xmo = "autoVB.cli.draw_xmo:draw_xmo"
 fch2vb = "autoVB.cli.fch2vb:fch2vb"
+xmo2json = "autoVB.cli.xmo2json:xmo2json"
 
 [tool.setuptools.package-dir]
 "" = "src"

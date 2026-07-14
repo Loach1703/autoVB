@@ -61,6 +61,7 @@ class VBSettings:
     sort: bool = False
     novb: bool = False
     nogvb: bool = False
+    nojson: bool = False
     guess: str = "nbo"
     active_order: str = "default"
     nbo_file: Path = None
@@ -417,7 +418,7 @@ class autoVBMain:
         drawer = MoleculeBondVariantDrawer(
             xyz_file=drawer_input.xyz_file,
             output_dir=output_dir,
-            charge=0,
+            charge=int(parsed_data.ctrl_options.get("ncharge", self.input_data.charge)),
             active_bond_atom=drawer_input.active_bond_atom,
             active_space=drawer_input.active_space,
             active_space_color="#B00000",
@@ -585,6 +586,10 @@ class autoVBMain:
                     logger.warning("No parsed .xmo data available for drawing. Skipping draw_xmo step.")
                     logger.warning("If you want to draw the .xmo, you can use command line tool 'draw_xmo' with the generated .xmo file after running XMVB.")
             self.timed_call("draw_xmo", self.draw_xmo, self.parsed_data, 'cc')
+
+        if not self.input_data.vbsettings.nojson and hasattr(self, 'parsed_data'):
+            from .io.writers import write_json_summary
+            self.timed_call("write_json_summary", write_json_summary, self.input_data, self.parsed_data)
 
         workflow_elapsed = (datetime.datetime.now() - workflow_start).total_seconds()
 

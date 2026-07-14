@@ -3,7 +3,7 @@ import sys
 import subprocess
 import logging
 from pathlib import Path
-from autoVB.cli import autovb, draw_xmo, nbo, xmi
+from autoVB.cli import autovb, draw_xmo, nbo, xmi, xmo2json
 
 def test_autovb_nbo_help_exits_0():
     with pytest.raises(SystemExit) as exc:
@@ -18,6 +18,11 @@ def test_autovb_xmi_help_exits_0():
 def test_draw_xmo_help_exits_0():
     with pytest.raises(SystemExit) as exc:
         draw_xmo.draw_xmo(["--help"])
+    assert exc.value.code == 0
+
+def test_xmo2json_help_exits_0():
+    with pytest.raises(SystemExit) as exc:
+        xmo2json.xmo2json(["--help"])
     assert exc.value.code == 0
 
 def test_draw_xmo_structures_per_row_parser():
