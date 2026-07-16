@@ -400,6 +400,8 @@ class XMVBNBO:
             threshold_bd_bonding_star_min = 0.95
             threshold_bd_antibonding = 0.03
             threshold_bd_antibonding_min = 0.075
+            threshold_strong_antibonding = 0.06
+            threshold_strong_antibonding_max = 0.15
             threshold_lp = 0.98
             threshold_lp_min = 0.95
         debug = self.input_data.debug
@@ -481,6 +483,8 @@ class XMVBNBO:
 
             # NBO输出中的轨道编号从1开始；矩阵切片需要0-based索引，所以这里统一减一
             active_indices = [item["orbital"].index - 1 for item in selected_items]
+            if not active_indices:
+                return 0, 0, active_indices, selected_items
             nae, nao = self.get_as_from_aoi(active_indices)
             if debug:
                 logger.debug(
@@ -942,15 +946,20 @@ class XMVBNBO:
         nae = 0
         nao = 0
 
+        two_electron_types = {"BD", "LP", "CR"}
+        zero_electron_types = {"BD*", "LP*", "RY", "RY*"}
+
         for idx in active_indices:
             orbital = nbo_data[idx]
-            if orbital.orbital_type in ("BD", "LP", "CR"):
+            if orbital.orbital_type in two_electron_types:
                 nae += 2
-            elif orbital.orbital_type in ("BD*", "LP*"):
+            elif orbital.orbital_type in zero_electron_types:
                 nae += 0
-            elif orbital.orbital_type in ("RY*"):
-                nae += 0
-                logger.warning(f"Orbital {idx} is of type RY*, which is not counted towards active electrons. Please check if this is intended.")
+            else:
+                logger.debug(
+                    f"Unsupported NBO orbital type '{orbital.orbital_type}' "
+                    f"for orbital {orbital.index}; cannot determine its active-electron count."
+                )
             nao += len(orbital.connection)
             if self.input_data.debug:
                 logger.debug(f"AOI orbital index {idx}(spin: {self.mol.spin}): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")

@@ -13,6 +13,7 @@ tmp-*
 orb.tmp
 *_vb.xmi
 *_blw.xmi
+paper_outline_cn/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
