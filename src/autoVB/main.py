@@ -409,7 +409,6 @@ class autoVBMain:
             output_dir,
             hide_hydrogens=hide_hydrogens,
             max_structures=MAX_STR,
-            baseline_index=1,
             weight_table=WEIGHT,
         )
         drawer_input = converter.convert()
@@ -421,6 +420,7 @@ class autoVBMain:
             charge=int(parsed_data.ctrl_options.get("ncharge", self.input_data.charge)),
             active_bond_atom=drawer_input.active_bond_atom,
             active_space=drawer_input.active_space,
+            baseline_unpaired_atoms=drawer_input.baseline_unpaired_atoms,
             active_space_color="#B00000",
             active_space_width=3.0,
             color_active_space=True,
@@ -436,6 +436,7 @@ class autoVBMain:
         logger.info(f"Active orbital -> atom: {drawer_input.orbital_to_atom}")
         logger.info(f"Weight table: {drawer_input.weight_table}")
         logger.info(f"active_bond_atom: {drawer_input.active_bond_atom}")
+        logger.info(f"Bond perception mode: {drawer.bond_perception_mode}")
         logger.info(f"Drawn structures: {len(drawer_input.active_space)}")
         logger.info(f"Output directory: {result.output_dir.resolve()}")
         for out_file in result.written_files:

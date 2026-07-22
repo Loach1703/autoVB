@@ -46,6 +46,7 @@ class MoleculeBondVariantDrawer:
         active_bond_atom: 原始电子区域。每个原子编号出现一次代表
             该原子贡献 1 个电子；例如 `[1, 2]` 代表 1-2 区域有 2 个电子。
             重复编号可表示同一键多级降级，例如 `[1, 2, 1, 2]`。
+        baseline_unpaired_atoms: 基准价键结构中未成对电子所在的原子编号。
         active_space: 要绘制的价键结构信息列表，其中 `bond_pairs` 管成键、电荷
             和自配对电子。
         active_space_color: 活性空间键、电荷符号、孤对电子点的默认颜色。
@@ -103,6 +104,7 @@ class MoleculeBondVariantDrawer:
         *,
         active_bond_atom: Sequence[Sequence[int]],
         active_space: Sequence[ValenceBondStructureInfo],
+        baseline_unpaired_atoms: Sequence[int] | None = None,
         active_space_color: str | None = None,
         active_space_width: float | None = None,
         color_active_space: bool = True,
@@ -125,6 +127,7 @@ class MoleculeBondVariantDrawer:
             charge: RDKit 从 XYZ 推断键连时使用的总电荷。
             active_bond_atom: 需要先降级的原始电子区域。
             active_space: 价键结构输入。
+            baseline_unpaired_atoms: 基准价键结构中的未成对电子原子。
             active_space_color: 活性空间键、电荷、孤对电子点的默认颜色。
             active_space_width: 活性空间键线条宽度。
             color_active_space: 是否高亮活性空间中新升高键级的键线。
@@ -148,6 +151,12 @@ class MoleculeBondVariantDrawer:
         self.charge = charge
         self.active_bond_atom = self._copy_atom_groups(active_bond_atom)
         self.active_space = self._copy_active_space(active_space)
+        self.baseline_unpaired_atoms = (
+            None
+            if baseline_unpaired_atoms is None
+            else list(baseline_unpaired_atoms)
+        )
+        self.bond_perception_mode = "bond_order"
         self.active_space_color = active_space_color or self.DEFAULT_ACTIVE_SPACE_COLOR
         self.active_space_width = (
             self.DEFAULT_ACTIVE_SPACE_WIDTH
@@ -297,32 +306,49 @@ class MoleculeBondVariantDrawer:
         if not self.xyz_file.exists():
             raise FileNotFoundError(f"XYZ file not found: {self.xyz_file}")
 
-        mol = Chem.MolFromXYZFile(str(self.xyz_file))
-        if mol is None:
+        raw_mol = Chem.MolFromXYZFile(str(self.xyz_file))
+        if raw_mol is None:
             raise ValueError(f"Could not parse XYZ file: {self.xyz_file}")
 
-        try:
-            rdDetermineBonds.DetermineBonds(mol, charge=self.charge)
-        except Exception as first_exc:
+        mol = None
+        first_exc: Exception | None = None
+        allow_charged_fragments_options = (
+            (False, True) if self.baseline_unpaired_atoms else (True, False)
+        )
+        for allow_charged_fragments in allow_charged_fragments_options:
+            candidate = Chem.Mol(raw_mol)
             try:
-                # 自由基体系常因形式电荷/价态分配失败；改用 radical 标记后
-                # 通常仍能得到可用于绘图的键级。
                 rdDetermineBonds.DetermineBonds(
-                    mol,
+                    candidate,
                     charge=self.charge,
-                    allowChargedFragments=False,
+                    allowChargedFragments=allow_charged_fragments,
                 )
-            except Exception:
-                try:
-                    # 价键结构绘图至少需要连接拓扑；若键级无法可靠推断，
-                    # 退回到只根据坐标推断连接关系。
-                    rdDetermineBonds.DetermineConnectivity(mol, charge=self.charge)
-                except Exception as exc:
-                    raise ValueError(
-                        f"Bond perception failed for {self.xyz_file.name}. "
-                        f"Try a different charge value. First RDKit error: "
-                        f"{first_exc}"
-                    ) from exc
+            except Exception as exc:
+                if first_exc is None:
+                    first_exc = exc
+                continue
+
+            if self._electron_assignment_matches(candidate):
+                mol = candidate
+                break
+
+        if mol is None and self.baseline_unpaired_atoms:
+            # 键级和自由基分配不可靠时，只读取干净的 sigma 连接骨架。
+            mol = Chem.Mol(raw_mol)
+            try:
+                rdDetermineBonds.DetermineConnectivity(mol, charge=self.charge)
+            except Exception as exc:
+                raise ValueError(
+                    f"Bond perception failed for {self.xyz_file.name}. "
+                    f"Try a different charge value. First RDKit error: "
+                    f"{first_exc}"
+                ) from exc
+            self.bond_perception_mode = "connectivity_only"
+        elif mol is None:
+            raise ValueError(
+                f"Bond-order perception failed for {self.xyz_file.name}. "
+                f"First RDKit error: {first_exc}"
+            )
 
         visible_mol = (
             Chem.RemoveHs(mol, sanitize=False)
@@ -336,10 +362,25 @@ class MoleculeBondVariantDrawer:
 
         for atom in visible_mol.GetAtoms():
             atom.SetNoImplicit(True)
+            # 自由基位置由每个 XMVB 价键结构单独绘制。
+            atom.SetNumRadicalElectrons(0)
 
         visible_mol.UpdatePropertyCache(strict=False)
         rdDepictor.Compute2DCoords(visible_mol)
         return visible_mol
+
+    def _electron_assignment_matches(self, mol: Chem.Mol) -> bool:
+        """检查 RDKit 的电荷和自由基数是否符合 XMVB 基准结构。"""
+        inferred_charge = sum(atom.GetFormalCharge() for atom in mol.GetAtoms())
+        if inferred_charge != self.charge:
+            return False
+        if self.baseline_unpaired_atoms is None:
+            return True
+
+        inferred_radicals = sum(
+            atom.GetNumRadicalElectrons() for atom in mol.GetAtoms()
+        )
+        return inferred_radicals == len(self.baseline_unpaired_atoms)
 
     def apply_variant(
         self,
@@ -376,7 +417,8 @@ class MoleculeBondVariantDrawer:
         for atom in editable_mol.GetAtoms():
             atom.SetNoImplicit(True)
 
-        self._decrease_bond_orders_in_atom_groups(editable_mol)
+        if self.bond_perception_mode == "bond_order":
+            self._decrease_bond_orders_in_atom_groups(editable_mol)
 
         upgraded_bond_counts: dict[int, int] = {}
         for begin_atom, end_atom in valence_bond_structure.bond_pairs:
@@ -1478,6 +1520,8 @@ class MoleculeBondVariantDrawer:
                 actual_counts[begin_atom] += 1
             if end_atom in actual_counts:
                 actual_counts[end_atom] += 1
+        for atom_number in valence_bond_structure.unpaired_atoms:
+            actual_counts[atom_number] = actual_counts.get(atom_number, 0) + 1
 
         charge_notes: dict[int, str] = {}
         atom_numbers = sorted(set(expected_counts) | set(actual_counts))
@@ -1538,6 +1582,8 @@ class MoleculeBondVariantDrawer:
         for atom_group in self.active_bond_atom:
             for atom_number in atom_group:
                 expected_counts[atom_number] = expected_counts.get(atom_number, 0) + 1
+        for atom_number in self.baseline_unpaired_atoms or []:
+            expected_counts[atom_number] = expected_counts.get(atom_number, 0) + 1
 
         return expected_counts
 

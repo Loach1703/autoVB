@@ -46,7 +46,7 @@ def draw_xmo_file(
     *,
     weight_table: str = DEFAULT_XMO_WEIGHT_TABLE,
     max_structures: int | None = DEFAULT_XMO_MAX_STRUCTURES,
-    baseline_index: int = 1,
+    baseline_index: int | None = None,
     charge: int = 0,
     hide_hydrogens: bool = True,
     write_individual_svgs: bool = False,
@@ -85,6 +85,7 @@ def draw_xmo_file(
         charge=charge,
         active_bond_atom=drawer_input.active_bond_atom,
         active_space=drawer_input.active_space,
+        baseline_unpaired_atoms=drawer_input.baseline_unpaired_atoms,
         active_space_color=DEFAULT_XMO_ACTIVE_SPACE_COLOR,
         active_space_width=DEFAULT_XMO_ACTIVE_SPACE_WIDTH,
         color_active_space=True,
@@ -101,6 +102,7 @@ def draw_xmo_file(
     print(f"Active orbital -> atom: {drawer_input.orbital_to_atom}")
     print(f"Weight table: {drawer_input.weight_table}")
     print(f"active_bond_atom: {drawer_input.active_bond_atom}")
+    print(f"Bond perception mode: {drawer.bond_perception_mode}")
     print(f"Drawn structures: {len(drawer_input.active_space)}")
     print(f"Output directory: {result.output_dir.resolve()}")
     for out_file in result.written_files:
@@ -135,8 +137,11 @@ def draw_xmo(argv=None) -> int:
     parser.add_argument(
         "--baseline-index",
         type=int,
-        default=1,
-        help="structure index used as the initial electron distribution, default: 1",
+        default=None,
+        help=(
+            "structure index used as the initial electron distribution; "
+            "the highest-weight structure is used by default"
+        ),
     )
     parser.add_argument(
         "--charge",

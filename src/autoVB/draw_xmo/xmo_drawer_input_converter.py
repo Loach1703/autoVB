@@ -15,6 +15,7 @@ class XmoDrawerInput:
     Args:
         xyz_file: 由 `$geo` 坐标块写出的临时 XYZ 文件路径。
         active_bond_atom: 用于初始键降级的活性成键原子区域。
+        baseline_unpaired_atoms: 基准价键结构中的未成对电子原子。
         active_space: 需要绘制的价键结构列表。
         orbital_to_atom: XMVb 活性轨道编号到绘图原子编号的映射。
         weight_table: 当前使用的权重表，取值为 `"cc"` 或 `"lowdin"`。
@@ -22,6 +23,7 @@ class XmoDrawerInput:
 
     xyz_file: Path
     active_bond_atom: list[list[int]]
+    baseline_unpaired_atoms: list[int]
     active_space: list[ValenceBondStructureInfo]
     orbital_to_atom: dict[int, int]
     weight_table: str
@@ -39,7 +41,7 @@ class XmoToDrawerInputConverter:
         *,
         hide_hydrogens: bool = True,
         max_structures: int | None = None,
-        baseline_index: int = 1,
+        baseline_index: int | None = None,
         weight_table: str = "cc",
     ) -> None:
         """初始化 XMO 到绘图输入的转换器。
@@ -49,7 +51,8 @@ class XmoToDrawerInputConverter:
             output_dir: 临时 XYZ 和 SVG 输出目录。
             hide_hydrogens: 是否让绘图原子编号遵循“隐藏氢原子后”的编号。
             max_structures: 最多转换多少个 CC 结构；`None` 表示转换全部。
-            baseline_index: 作为初始电子排布基准的 CC 权重序号，使用 1-based 编号。
+            baseline_index: 作为初始电子排布基准的权重序号；`None` 表示使用
+                当前权重表中权重最大的结构。
             weight_table: 使用哪一种权重表，`"cc"` 表示 `WEIGHTS OF STRUCTURES`，
                 `"lowdin"` 表示 `Lowdin Weights`。
         """
@@ -82,6 +85,7 @@ class XmoToDrawerInputConverter:
         return XmoDrawerInput(
             xyz_file=xyz_file,
             active_bond_atom=active_bond_atom,
+            baseline_unpaired_atoms=list(baseline_structure.unpaired_atoms),
             active_space=[
                 self._weight_to_structure_info(weight, geo_to_drawer_atom)
                 for weight in self._selected_weights()
