@@ -4,6 +4,9 @@ from .molecule_bond_variant_drawer import (
     MoleculeBondVariantDrawer,
     ValenceBondStructureInfo,
 )
+from .orbital_connectivity_molecule_drawer import (
+    OrbitalConnectivityMoleculeDrawer,
+)
 from .xmo_drawer_input_converter import (
     XmoDrawerInput,
     XmoToDrawerInputConverter,
@@ -11,6 +14,7 @@ from .xmo_drawer_input_converter import (
 
 __all__ = [
     "MoleculeBondVariantDrawer",
+    "OrbitalConnectivityMoleculeDrawer",
     "ValenceBondStructureInfo",
     "XmoDrawerInput",
     "XmoToDrawerInputConverter",
