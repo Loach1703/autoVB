@@ -187,7 +187,10 @@ opt参数，暂未实现
 ##### 2.3.4.1 draw_xmo
 调用 `draw_xmo` 工具，对 `.xmo` 文件进行解析，生成分子价键结构 `.svg` 图像文件。画出的分子构型仅供参考，可能存在错误。
 
-##### 2.3.4.2 draw_rumer
+##### 2.3.4.2 xmo2svg
+默认值为 `None`，不生成图像。设置 `xmo2svg=optimized3d` 时，等价于执行 `xmo2svg input.xmo --projection optimized3d`，并生成与 `.xmo` 文件同名的 `.svg` 文件。也可以设置为 `rdkit`、`pca` 或 `contact`。
+
+##### 2.3.4.3 draw_rumer
 使用 Rumer 规则选择的活性空间原子在分子中的拓扑顺序排序时，生成分子 `.svg` 图像文件。
 
 #### 2.3.5 其他参数

@@ -73,6 +73,13 @@ def xmo2svg_file(
         projection=projection,
     )
     result = drawer.draw()
+    grid_path = output_dir / f"{xmo_path.stem}_grid.svg"
+    output_path = output_dir / f"{xmo_path.stem}.svg"
+    grid_path.replace(output_path)
+    result.written_files = [
+        output_path if written_file == grid_path else written_file
+        for written_file in result.written_files
+    ]
 
     print(f"Read XMO from: {parsed_data.source_file.resolve()}")
     print(f"Generated XYZ: {drawer_input.xyz_file.resolve()}")

@@ -9,6 +9,54 @@ from autoVB.draw_xmo.orbital_connectivity_molecule_drawer import (
 from autoVB.draw_xmo.molecule_bond_variant_drawer import (
     ValenceBondStructureInfo,
 )
+from autoVB.io.readers import autoVBInputParser
+from autoVB.main import VBSettings, autoVBMain
+
+
+def test_xmo2svg_workflow_setting_defaults_to_none():
+    assert VBSettings().xmo2svg is None
+
+
+def test_xmo2svg_workflow_setting_parses_projection():
+    parser = autoVBInputParser.__new__(autoVBInputParser)
+
+    settings = parser.parse_autovb_options(
+        "job autoVB{xmo2svg=optimized3d}"
+    )
+
+    assert settings.xmo2svg == "optimized3d"
+
+
+def test_xmo2svg_workflow_setting_rejects_unknown_projection():
+    with pytest.raises(ValueError, match="xmo2svg"):
+        VBSettings(xmo2svg="unknown").validate()
+
+
+def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
+    from autoVB.cli import xmo2svg as xmo2svg_module
+
+    captured = {}
+
+    def fake_xmo2svg_file(xmo_file, *, projection):
+        captured["xmo_file"] = xmo_file
+        captured["projection"] = projection
+        return "result"
+
+    monkeypatch.setattr(
+        xmo2svg_module,
+        "xmo2svg_file",
+        fake_xmo2svg_file,
+    )
+    workflow = autoVBMain.__new__(autoVBMain)
+    xmo_path = tmp_path / "sample.xmo"
+
+    result = workflow.draw_xmo2svg(xmo_path, "optimized3d")
+
+    assert result == "result"
+    assert captured == {
+        "xmo_file": xmo_path,
+        "projection": "optimized3d",
+    }
 
 
 def test_orbital_connectivity_keeps_close_molecules_separate(tmp_path):
@@ -104,6 +152,74 @@ def test_pca_projection_avoids_collapsing_bond_along_third_axis():
     assert projected_conformer.GetAtomPosition(0).Distance(
         projected_conformer.GetAtomPosition(1)
     ) == pytest.approx(2.0)
+
+
+def test_optimized3d_projection_keeps_perpendicular_bonds_visible():
+    editable_mol = Chem.RWMol()
+    for _ in range(4):
+        editable_mol.AddAtom(Chem.Atom("C"))
+    for end_atom in (1, 2, 3):
+        editable_mol.AddBond(0, end_atom, Chem.BondType.SINGLE)
+    mol = editable_mol.GetMol()
+    conformer = Chem.Conformer(4)
+    for atom_index, coordinates in enumerate(
+        (
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+        )
+    ):
+        conformer.SetAtomPosition(atom_index, Point3D(*coordinates))
+    mol.AddConformer(conformer)
+
+    OrbitalConnectivityMoleculeDrawer._apply_optimized_3d_projection(mol)
+
+    projected_conformer = mol.GetConformer()
+    for end_atom in (1, 2, 3):
+        assert projected_conformer.GetAtomPosition(0).Distance(
+            projected_conformer.GetAtomPosition(end_atom)
+        ) > 0.8
+
+
+def test_optimized3d_projection_separates_overlapping_fragments():
+    editable_mol = Chem.RWMol()
+    for _ in range(4):
+        editable_mol.AddAtom(Chem.Atom("H"))
+    editable_mol.AddBond(0, 1, Chem.BondType.SINGLE)
+    editable_mol.AddBond(2, 3, Chem.BondType.SINGLE)
+    mol = editable_mol.GetMol()
+    conformer = Chem.Conformer(4)
+    for atom_index, coordinates in enumerate(
+        (
+            (-0.37, 0.0, 0.0),
+            (0.37, 0.0, 0.0),
+            (-0.37, 0.0, 2.0),
+            (0.37, 0.0, 2.0),
+        )
+    ):
+        conformer.SetAtomPosition(atom_index, Point3D(*coordinates))
+    mol.AddConformer(conformer)
+
+    OrbitalConnectivityMoleculeDrawer._apply_optimized_3d_projection(mol)
+
+    projected_conformer = mol.GetConformer()
+    first_center = Point3D(
+        sum(projected_conformer.GetAtomPosition(index).x for index in (0, 1))
+        / 2,
+        sum(projected_conformer.GetAtomPosition(index).y for index in (0, 1))
+        / 2,
+        0.0,
+    )
+    second_center = Point3D(
+        sum(projected_conformer.GetAtomPosition(index).x for index in (2, 3))
+        / 2,
+        sum(projected_conformer.GetAtomPosition(index).y for index in (2, 3))
+        / 2,
+        0.0,
+    )
+
+    assert first_center.Distance(second_center) == pytest.approx(2.0)
 
 
 def test_contact_projection_uses_rdkit_for_one_fragment(tmp_path):
@@ -262,7 +378,7 @@ def test_contact_projection_uses_bonds_from_all_displayed_structures(tmp_path):
     ]
 
 
-@pytest.mark.parametrize("projection", ["pca", "contact"])
+@pytest.mark.parametrize("projection", ["pca", "optimized3d", "contact"])
 def test_xmo2svg_generates_grid_from_orbital_connectivity(
     tmp_path,
     projection,
@@ -309,6 +425,7 @@ Lowdin Weights
 
     assert xmo2svg([str(xmo_path), "--projection", projection]) == 0
 
-    grid_path = tmp_path / "ethene_grid.svg"
-    assert grid_path.exists()
-    assert "<svg" in grid_path.read_text(encoding="utf-8")
+    svg_path = tmp_path / "ethene.svg"
+    assert svg_path.exists()
+    assert not (tmp_path / "ethene_grid.svg").exists()
+    assert "<svg" in svg_path.read_text(encoding="utf-8")

@@ -66,6 +66,7 @@ class VBSettings:
     active_order: str = "default"
     nbo_file: Path = None
     draw_xmo: bool = False
+    xmo2svg: Optional[str] = None
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
 
@@ -97,6 +98,19 @@ class VBSettings:
         # guess参数可选值：nbo, pnbo, gvb
         if self.guess not in ("nbo", "pnbo", "gvb"):
             raise ValueError("VBSettings: 'guess' must be 'nbo', 'pnbo', or 'gvb'")
+
+        if self.xmo2svg is not None:
+            self.xmo2svg = self.xmo2svg.strip().lower()
+            if self.xmo2svg not in (
+                "rdkit",
+                "pca",
+                "optimized3d",
+                "contact",
+            ):
+                raise ValueError(
+                    "VBSettings: 'xmo2svg' must be 'rdkit', 'pca', "
+                    "'optimized3d', 'contact', or None"
+                )
 
         # acitve_order的动态默认值：如果有aoa，则默认按照aoa顺序，否则设为rumer
         if self.active_order == "default":
@@ -442,6 +456,12 @@ class autoVBMain:
         for out_file in result.written_files:
             logger.info(f" - {out_file.name}")
 
+    def draw_xmo2svg(self, xmo_file: Path, projection: str):
+        """调用 xmo2svg，按指定三维或二维排布方式生成 SVG。"""
+        from .cli.xmo2svg import xmo2svg_file
+
+        return xmo2svg_file(xmo_file, projection=projection)
+
     def parser_xmo(self, xmo_file: Path) -> 'XmoParsedData':
         '''
         解析XMVB输出文件，提取相关信息。
@@ -587,6 +607,15 @@ class autoVBMain:
                     logger.warning("No parsed .xmo data available for drawing. Skipping draw_xmo step.")
                     logger.warning("If you want to draw the .xmo, you can use command line tool 'draw_xmo' with the generated .xmo file after running XMVB.")
             self.timed_call("draw_xmo", self.draw_xmo, self.parsed_data, 'cc')
+
+        if self.input_data.vbsettings.xmo2svg is not None:
+            log_subroutine("Entry xmo2svg")
+            self.timed_call(
+                "xmo2svg",
+                self.draw_xmo2svg,
+                xmo_path,
+                self.input_data.vbsettings.xmo2svg,
+            )
 
         if not self.input_data.vbsettings.nojson and hasattr(self, 'parsed_data'):
             from .io.writers import write_json_summary
