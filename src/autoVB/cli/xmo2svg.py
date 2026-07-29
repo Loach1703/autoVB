@@ -24,6 +24,7 @@ def xmo2svg_file(
     show_atom_labels: bool = True,
     show_lone_pairs: bool = True,
     structures_per_row: int = DEFAULT_XMO_STRUCTURES_PER_ROW,
+    projection: str = "rdkit",
 ):
     """使用 XMO ``$orb`` 标签建立键连并生成价键结构 SVG。"""
     from ..draw_xmo.orbital_connectivity_molecule_drawer import (
@@ -69,6 +70,7 @@ def xmo2svg_file(
         show_lone_pairs=show_lone_pairs,
         write_individual_svgs=write_individual_svgs,
         structures_per_row=structures_per_row,
+        projection=projection,
     )
     result = drawer.draw()
 
@@ -78,6 +80,7 @@ def xmo2svg_file(
     print(f"Weight table: {drawer_input.weight_table}")
     print(f"active_bond_atom: {drawer_input.active_bond_atom}")
     print(f"Connectivity source: $orb")
+    print(f"Projection: {projection}")
     print(f"Drawn structures: {len(drawer_input.active_space)}")
     print(f"Output directory: {result.output_dir.resolve()}")
     for out_file in result.written_files:
@@ -128,6 +131,12 @@ def xmo2svg(argv=None) -> int:
         help="total charge used by RDKit when assigning bond orders, default: 0",
     )
     parser.add_argument(
+        "--projection",
+        choices=("rdkit", "pca", "optimized3d", "contact"),
+        default="rdkit",
+        help="atom layout method, default: rdkit",
+    )
+    parser.add_argument(
         "--show-hydrogens",
         action="store_true",
         help="show hydrogen atoms; hydrogens are hidden by default",
@@ -170,6 +179,7 @@ def xmo2svg(argv=None) -> int:
         show_atom_labels=not args.hide_atom_labels,
         show_lone_pairs=not args.hide_lone_pairs,
         structures_per_row=args.structures_per_row,
+        projection=args.projection,
     )
     return 0
 
