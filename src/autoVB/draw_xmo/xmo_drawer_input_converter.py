@@ -286,7 +286,11 @@ class XmoToDrawerInputConverter:
 
         return ValenceBondStructureInfo(
             file_suffix=self._file_suffix(weight),
-            legend=self._legend(weight, bond_pairs, unpaired_atoms),
+            legend=self._legend(
+                weight,
+                weight.atom_connections,
+                weight.unpaired_atoms,
+            ),
             bond_pairs=bond_pairs,
             unpaired_atoms=unpaired_atoms,
         )
@@ -364,8 +368,8 @@ class XmoToDrawerInputConverter:
 
         Args:
             weight: 一行权重。
-            bond_pairs: 已映射到原子编号的成键配对。
-            unpaired_atoms: 已映射到原子编号的未成对电子位置。
+            bond_pairs: 使用 `$geo` 原始原子编号的成键配对。
+            unpaired_atoms: 使用 `$geo` 原始原子编号的未成对电子位置。
 
         Returns:
             简短图例文本。

@@ -108,6 +108,44 @@ $end
     assert drawer_input.active_bond_atom == [[1, 1]]
 
 
+def test_converter_legend_keeps_original_numbers_when_hydrogens_are_hidden(
+    tmp_path,
+):
+    xmo_path = write_xmo(
+        tmp_path,
+        """
+$ctrl
+vbscf
+nae=2
+nao=2
+basis=6-31g
+$end
+
+$orb
+1*2
+1
+3
+$end
+
+$geo
+C -0.60 0.0 0.0
+H -1.66 0.0 0.0
+C  0.60 0.0 0.0
+H  1.66 0.0 0.0
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 1.00 ****** 1-2
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+    drawer_input = XmoToDrawerInputConverter(parsed, tmp_path).convert()
+
+    assert drawer_input.active_space[0].bond_pairs == [(1, 2)]
+    assert drawer_input.active_space[0].legend.endswith(": 1-3")
+
+
 def test_drawer_renders_unpaired_electron_as_radical_dot(tmp_path):
     drawer = MoleculeBondVariantDrawer(
         xyz_file=tmp_path / "dummy.xyz",

@@ -90,6 +90,92 @@ H 2.38 0.0 0.0
     assert sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms()) == 0
 
 
+def test_hidden_hydrogens_keep_original_atom_numbers(tmp_path):
+    xyz_path = tmp_path / "acetylene.xyz"
+    xyz_path.write_text(
+        """4
+interleaved hydrogen atoms
+C -0.60 0.0 0.0
+H -1.66 0.0 0.0
+C  0.60 0.0 0.0
+H  1.66 0.0 0.0
+""",
+        encoding="utf-8",
+    )
+    drawer = OrbitalConnectivityMoleculeDrawer(
+        xyz_file=xyz_path,
+        output_dir=tmp_path,
+        charge=0,
+        orbital_atom_rows=[[1, 2], [1, 3], [3, 4]],
+        active_bond_atom=[],
+        active_space=[],
+        baseline_unpaired_atoms=[],
+        hide_hydrogens=True,
+    )
+
+    mol = drawer.build_base_molecule()
+
+    assert drawer._atom_display_numbers(mol) == [1, 3]
+
+
+def test_benzene_keeps_sigma_ring_after_active_bond_decrease(tmp_path):
+    xyz_path = tmp_path / "benzene.xyz"
+    xyz_path.write_text(
+        """12
+benzene
+C  0.6995  1.2116 0.0
+H  1.2460  2.1582 0.0
+C -0.6995  1.2116 0.0
+H -1.2460  2.1582 0.0
+C -1.3990  0.0000 0.0
+H -2.4920  0.0000 0.0
+C -0.6995 -1.2116 0.0
+H -1.2460 -2.1582 0.0
+C  0.6995 -1.2116 0.0
+H  1.2460 -2.1582 0.0
+C  1.3990  0.0000 0.0
+H  2.4920  0.0000 0.0
+""",
+        encoding="utf-8",
+    )
+    structure = ValenceBondStructureInfo(
+        file_suffix="ionic",
+        legend="ionic",
+        bond_pairs=[(1, 1), (2, 3), (4, 5)],
+    )
+    drawer = OrbitalConnectivityMoleculeDrawer(
+        xyz_file=xyz_path,
+        output_dir=tmp_path,
+        charge=0,
+        orbital_atom_rows=[
+            [1, 2],
+            [1, 3],
+            [1, 11],
+            [3, 4],
+            [3, 5],
+            [5, 6],
+            [5, 7],
+            [7, 8],
+            [7, 9],
+            [9, 10],
+            [9, 11],
+            [11, 12],
+        ],
+        active_bond_atom=[[2, 3, 4, 5, 1, 6]],
+        active_space=[structure],
+        baseline_unpaired_atoms=[],
+        hide_hydrogens=True,
+    )
+
+    base_mol = drawer.build_base_molecule()
+    bond_types = [bond.GetBondType() for bond in base_mol.GetBonds()]
+    variant_mol, _ = drawer.apply_variant(base_mol, structure)
+
+    assert bond_types.count(Chem.BondType.SINGLE) == 3
+    assert bond_types.count(Chem.BondType.DOUBLE) == 3
+    assert variant_mol.GetNumBonds() == 6
+
+
 def test_pca_projection_preserves_relative_fragment_distances(tmp_path):
     xyz_path = tmp_path / "two_h2.xyz"
     xyz_path.write_text(

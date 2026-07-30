@@ -35,7 +35,8 @@ class ValenceBondStructureInfo:
 class MoleculeBondVariantDrawer:
     """从 XYZ 文件生成多种价键结构 SVG 图。
 
-    原子编号使用“当前可见原子”在 XYZ 文件中的顺序。默认会隐藏氢原子；
+    图中原子标签使用原子在 XYZ 文件中的原始编号。默认会隐藏氢原子，
+    但后续原子的显示编号不会因为隐藏氢原子而改变；
     如果需要把氢纳入电子分布与绘图，请设置 `hide_hydrogens=False`。
     芳香键会先转换为 Kekule 单双键交替结构，再执行键降级与键升级。
 
@@ -79,6 +80,7 @@ class MoleculeBondVariantDrawer:
     CHARGE_NOTE_PROP = "_bondVariantChargeNote"
     LONE_PAIR_COUNT_PROP = "_bondVariantLonePairCount"
     RADICAL_COUNT_PROP = "_bondVariantRadicalCount"
+    ORIGINAL_ATOM_NUMBER_PROP = "_bondVariantOriginalAtomNumber"
 
     @dataclass
     class Result:
@@ -309,6 +311,8 @@ class MoleculeBondVariantDrawer:
         raw_mol = Chem.MolFromXYZFile(str(self.xyz_file))
         if raw_mol is None:
             raise ValueError(f"Could not parse XYZ file: {self.xyz_file}")
+        for atom in raw_mol.GetAtoms():
+            atom.SetIntProp(self.ORIGINAL_ATOM_NUMBER_PROP, atom.GetIdx() + 1)
 
         mol = None
         first_exc: Exception | None = None
@@ -577,6 +581,7 @@ class MoleculeBondVariantDrawer:
             self._radical_counts_from_mol(mol),
             width,
             height,
+            atom_display_numbers=self._atom_display_numbers(mol),
         )
 
     @staticmethod
@@ -599,6 +604,16 @@ class MoleculeBondVariantDrawer:
             coords.append((float(point.x), float(point.y)))
         return coords
 
+    @classmethod
+    def _atom_display_numbers(cls, mol: Chem.Mol) -> list[int]:
+        """读取原子在输入 XYZ 文件中的原始编号。"""
+        return [
+            atom.GetIntProp(cls.ORIGINAL_ATOM_NUMBER_PROP)
+            if atom.HasProp(cls.ORIGINAL_ATOM_NUMBER_PROP)
+            else atom.GetIdx() + 1
+            for atom in mol.GetAtoms()
+        ]
+
     def _add_svg_annotations(
         self,
         svg: str,
@@ -608,6 +623,7 @@ class MoleculeBondVariantDrawer:
         radical_counts: dict[int, int],
         width: int,
         height: int,
+        atom_display_numbers: Sequence[int] | None = None,
     ) -> str:
         """向 SVG 追加原子编号、电荷和孤对电子标注。
 
@@ -619,12 +635,15 @@ class MoleculeBondVariantDrawer:
             radical_counts: 原子索引到未成对电子数的映射。
             width: SVG 宽度。
             height: SVG 高度。
+            atom_display_numbers: 每个可见原子在输入文件中的原始编号。
 
         Returns:
             插入自定义标注后的 SVG 文本。
         """
         annotation_parts: list[str] = []
         centroid = self._point_centroid(atom_coords)
+        if atom_display_numbers is None:
+            atom_display_numbers = range(1, len(atom_coords) + 1)
 
         if self.show_lone_pairs:
             annotation_parts.extend(
@@ -664,7 +683,7 @@ class MoleculeBondVariantDrawer:
                 annotation_parts.append(
                     self._svg_text_label(
                         css_class=f"atom-number-label atom-{atom_idx}",
-                        text=str(atom_idx + 1),
+                        text=str(atom_display_numbers[atom_idx]),
                         position=self._label_position(
                             atom_coord,
                             centroid,

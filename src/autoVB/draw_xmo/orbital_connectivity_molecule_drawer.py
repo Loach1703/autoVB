@@ -84,6 +84,8 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
         raw_mol = Chem.MolFromXYZFile(str(self.xyz_file))
         if raw_mol is None:
             raise ValueError(f"Could not parse XYZ file: {self.xyz_file}")
+        for atom in raw_mol.GetAtoms():
+            atom.SetIntProp(self.ORIGINAL_ATOM_NUMBER_PROP, atom.GetIdx() + 1)
 
         orbital_bonds = self._orbital_bonds()
         if not orbital_bonds:
@@ -130,7 +132,7 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
             )
 
         visible_mol = (
-            Chem.RemoveHs(mol, sanitize=False)
+            Chem.RemoveHs(mol, sanitize=True)
             if self.hide_hydrogens
             else Chem.Mol(mol)
         )
