@@ -174,6 +174,90 @@ H  2.4920  0.0000 0.0
     assert bond_types.count(Chem.BondType.SINGLE) == 3
     assert bond_types.count(Chem.BondType.DOUBLE) == 3
     assert variant_mol.GetNumBonds() == 6
+    assert all(
+        not atom.HasProp(drawer.CONDENSED_ATOM_LABEL_PROP)
+        for atom in base_mol.GetAtoms()
+    )
+
+
+def test_condensed_hydrogens_label_heteroatoms_and_isolated_carbon(tmp_path):
+    xyz_path = tmp_path / "mens.xyz"
+    xyz_path.write_text(
+        """9
+mens
+N   0.0000  0.0000 -2.4404
+C   0.0000  0.0000 -0.6328
+H   1.0651  0.0000 -0.4754
+H  -0.5326 -0.9224 -0.4754
+H  -0.5326  0.9224 -0.4754
+Cl  0.0000  0.0000  1.8067
+H  -0.9551  0.0000 -2.8031
+H   0.4775  0.8271 -2.8031
+H   0.4775 -0.8271 -2.8031
+""",
+        encoding="utf-8",
+    )
+    drawer = OrbitalConnectivityMoleculeDrawer(
+        xyz_file=xyz_path,
+        output_dir=tmp_path,
+        charge=0,
+        orbital_atom_rows=[
+            [1, 7],
+            [1, 8],
+            [1, 9],
+            [2, 3],
+            [2, 4],
+            [2, 5],
+        ],
+        active_bond_atom=[],
+        active_space=[],
+        baseline_unpaired_atoms=[],
+        hide_hydrogens=True,
+    )
+
+    mol = drawer.build_base_molecule()
+    labels = {
+        atom.GetSymbol(): atom.GetProp(drawer.CONDENSED_ATOM_LABEL_PROP)
+        for atom in mol.GetAtoms()
+        if atom.HasProp(drawer.CONDENSED_ATOM_LABEL_PROP)
+    }
+
+    assert labels == {
+        "N": "NH<sub>3</sub>",
+        "C": "CH<sub>3</sub>",
+    }
+
+
+def test_condensed_hydrogens_can_be_disabled(tmp_path):
+    xyz_path = tmp_path / "ammonia.xyz"
+    xyz_path.write_text(
+        """4
+ammonia
+N 0.0 0.0 0.0
+H 0.9 0.0 0.0
+H 0.0 0.9 0.0
+H 0.0 0.0 0.9
+""",
+        encoding="utf-8",
+    )
+    drawer = OrbitalConnectivityMoleculeDrawer(
+        xyz_file=xyz_path,
+        output_dir=tmp_path,
+        charge=0,
+        orbital_atom_rows=[[1, 2], [1, 3], [1, 4]],
+        active_bond_atom=[],
+        active_space=[],
+        baseline_unpaired_atoms=[],
+        hide_hydrogens=True,
+        condense_hydrogens=False,
+    )
+
+    mol = drawer.build_base_molecule()
+
+    assert all(
+        not atom.HasProp(drawer.CONDENSED_ATOM_LABEL_PROP)
+        for atom in mol.GetAtoms()
+    )
 
 
 def test_pca_projection_preserves_relative_fragment_distances(tmp_path):

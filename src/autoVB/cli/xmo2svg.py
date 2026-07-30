@@ -25,6 +25,7 @@ def xmo2svg_file(
     show_lone_pairs: bool = True,
     structures_per_row: int = DEFAULT_XMO_STRUCTURES_PER_ROW,
     projection: str = "rdkit",
+    condense_hydrogens: bool = True,
 ):
     """使用 XMO ``$orb`` 标签建立键连并生成价键结构 SVG。"""
     from ..draw_xmo.orbital_connectivity_molecule_drawer import (
@@ -71,6 +72,7 @@ def xmo2svg_file(
         write_individual_svgs=write_individual_svgs,
         structures_per_row=structures_per_row,
         projection=projection,
+        condense_hydrogens=condense_hydrogens,
     )
     result = drawer.draw()
     grid_path = output_dir / f"{xmo_path.stem}_grid.svg"
@@ -149,6 +151,12 @@ def xmo2svg(argv=None) -> int:
         help="show hydrogen atoms; hydrogens are hidden by default",
     )
     parser.add_argument(
+        "--no-condensed-hydrogens",
+        action="store_false",
+        dest="condense_hydrogens",
+        help="do not show hidden hydrogens as compact heteroatom or isolated-C labels",
+    )
+    parser.add_argument(
         "--write-individual-svgs",
         action="store_true",
         help="write one SVG per structure in addition to the grid SVG",
@@ -187,6 +195,7 @@ def xmo2svg(argv=None) -> int:
         show_lone_pairs=not args.hide_lone_pairs,
         structures_per_row=args.structures_per_row,
         projection=args.projection,
+        condense_hydrogens=args.condense_hydrogens,
     )
     return 0
 

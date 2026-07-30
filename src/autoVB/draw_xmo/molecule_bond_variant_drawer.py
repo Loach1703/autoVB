@@ -81,6 +81,7 @@ class MoleculeBondVariantDrawer:
     LONE_PAIR_COUNT_PROP = "_bondVariantLonePairCount"
     RADICAL_COUNT_PROP = "_bondVariantRadicalCount"
     ORIGINAL_ATOM_NUMBER_PROP = "_bondVariantOriginalAtomNumber"
+    CONDENSED_ATOM_LABEL_PROP = "_bondVariantCondensedAtomLabel"
 
     @dataclass
     class Result:
@@ -499,9 +500,14 @@ class MoleculeBondVariantDrawer:
         """
         sub_img_width = 520
         sub_img_height = 390
+        # 左右间距
+        column_gap = 100
         mols_per_row = self.structures_per_row
         row_count = (len(mols) + mols_per_row - 1) // mols_per_row
-        grid_width = sub_img_width * mols_per_row
+        grid_width = (
+            sub_img_width * mols_per_row
+            + column_gap * (mols_per_row - 1)
+        )
         grid_height = sub_img_height * row_count
 
         parts = [
@@ -525,7 +531,7 @@ class MoleculeBondVariantDrawer:
         ):
             col_idx = idx % mols_per_row
             row_idx = idx // mols_per_row
-            x_offset = col_idx * sub_img_width
+            x_offset = col_idx * (sub_img_width + column_gap)
             y_offset = row_idx * sub_img_height
             sub_svg = self._draw_molecule_svg(
                 mol,
@@ -562,6 +568,12 @@ class MoleculeBondVariantDrawer:
             已完成键高亮、原子编号、电荷和孤对电子标注的 SVG 文本。
         """
         drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
+        draw_options = drawer.drawOptions()
+        for atom in mol.GetAtoms():
+            if atom.HasProp(self.CONDENSED_ATOM_LABEL_PROP):
+                draw_options.atomLabels[atom.GetIdx()] = atom.GetProp(
+                    self.CONDENSED_ATOM_LABEL_PROP
+                )
         drawer.DrawMolecule(mol, legend=legend)
         atom_coords = self._atom_draw_coords(drawer, mol)
         drawer.FinishDrawing()

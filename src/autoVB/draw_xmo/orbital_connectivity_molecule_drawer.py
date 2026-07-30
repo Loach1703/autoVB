@@ -42,6 +42,7 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
         write_individual_svgs: bool = False,
         structures_per_row: int = 2,
         projection: str = "rdkit",
+        condense_hydrogens: bool = True,
     ) -> None:
         super().__init__(
             xyz_file=xyz_file,
@@ -75,6 +76,7 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
             ]
         )
         self.projection = projection
+        self.condense_hydrogens = condense_hydrogens
 
     def build_base_molecule(self) -> Chem.Mol:
         """从双原子 ``$orb`` 标签建立连接，再由 RDKit 分配键级。"""
@@ -131,6 +133,8 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
                 f"First RDKit error: {first_exc}"
             )
 
+        if self.hide_hydrogens and self.condense_hydrogens:
+            self._set_condensed_hydrogen_labels(mol)
         visible_mol = (
             Chem.RemoveHs(mol, sanitize=True)
             if self.hide_hydrogens
@@ -160,6 +164,31 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
                 f"but got {self.projection!r}."
             )
         return visible_mol
+
+    def _set_condensed_hydrogen_labels(self, mol: Chem.Mol) -> None:
+        """为杂原子和孤立碳记录删氢后的紧凑显示标签。"""
+        for atom in mol.GetAtoms():
+            if atom.GetAtomicNum() == 1:
+                continue
+
+            hydrogen_count = sum(
+                neighbor.GetAtomicNum() == 1 for neighbor in atom.GetNeighbors()
+            )
+            heavy_atom_count = sum(
+                neighbor.GetAtomicNum() != 1 for neighbor in atom.GetNeighbors()
+            )
+            if hydrogen_count == 0:
+                continue
+            if atom.GetAtomicNum() == 6 and heavy_atom_count > 0:
+                continue
+
+            hydrogen_label = "H"
+            if hydrogen_count > 1:
+                hydrogen_label += f"<sub>{hydrogen_count}</sub>"
+            atom.SetProp(
+                self.CONDENSED_ATOM_LABEL_PROP,
+                f"{atom.GetSymbol()}{hydrogen_label}",
+            )
 
     def _apply_contact_projection(self, mol: Chem.Mol) -> None:
         """优先用价键结构中的跨片段键安排多个分子片段。"""

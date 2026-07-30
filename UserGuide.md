@@ -190,6 +190,8 @@ opt参数，暂未实现
 ##### 2.3.4.2 xmo2svg
 默认值为 `None`，不生成图像。设置 `xmo2svg=optimized3d` 时，等价于执行 `xmo2svg input.xmo --projection optimized3d`，并生成与 `.xmo` 文件同名的 `.svg` 文件。也可以设置为 `rdkit`、`pca` 或 `contact`。
 
+隐藏氢原子时，`xmo2svg` 默认将杂原子和孤立 C 上实际连接的 H 显示为 `NH3`、`OH`、`CH3` 等紧凑标签；普通碳骨架不添加氢标签。命令行可使用 `--no-condensed-hydrogens` 关闭该显示方式，或使用 `--show-hydrogens` 显示全部 H 原子。
+
 ##### 2.3.4.3 draw_rumer
 使用 Rumer 规则选择的活性空间原子在分子中的拓扑顺序排序时，生成分子 `.svg` 图像文件。
 
