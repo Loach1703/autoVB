@@ -26,6 +26,7 @@ def xmo2svg_file(
     structures_per_row: int = DEFAULT_XMO_STRUCTURES_PER_ROW,
     projection: str = "rdkit",
     condense_hydrogens: bool = True,
+    show_connection_labels: bool = True,
 ):
     """使用 XMO ``$orb`` 标签建立键连并生成价键结构 SVG。"""
     from ..draw_xmo.orbital_connectivity_molecule_drawer import (
@@ -51,6 +52,7 @@ def xmo2svg_file(
         max_structures=max_structures,
         baseline_index=baseline_index,
         weight_table=weight_table,
+        show_connection_labels=show_connection_labels,
     )
     drawer_input = converter.convert()
     hide_hydrogens = converter.hide_hydrogens
@@ -177,6 +179,11 @@ def xmo2svg(argv=None) -> int:
         help="hide atom-number labels",
     )
     parser.add_argument(
+        "--hide-connection-labels",
+        action="store_true",
+        help="hide bond-pair and radical labels after each structure weight",
+    )
+    parser.add_argument(
         "--hide-lone-pairs",
         action="store_true",
         help="hide lone-pair dots",
@@ -196,6 +203,7 @@ def xmo2svg(argv=None) -> int:
         structures_per_row=args.structures_per_row,
         projection=args.projection,
         condense_hydrogens=args.condense_hydrogens,
+        show_connection_labels=not args.hide_connection_labels,
     )
     return 0
 

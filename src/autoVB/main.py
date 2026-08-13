@@ -67,6 +67,7 @@ class VBSettings:
     nbo_file: Path = None
     draw_xmo: bool = False
     xmo2svg: Optional[str] = None
+    hide_svg_labels: bool = False
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
 
@@ -456,11 +457,21 @@ class autoVBMain:
         for out_file in result.written_files:
             logger.info(f" - {out_file.name}")
 
-    def draw_xmo2svg(self, xmo_file: Path, projection: str):
+    def draw_xmo2svg(
+        self,
+        xmo_file: Path,
+        projection: str,
+        hide_svg_labels: bool = False,
+    ):
         """调用 xmo2svg，按指定三维或二维排布方式生成 SVG。"""
         from .cli.xmo2svg import xmo2svg_file
 
-        return xmo2svg_file(xmo_file, projection=projection)
+        return xmo2svg_file(
+            xmo_file,
+            projection=projection,
+            show_atom_labels=not hide_svg_labels,
+            show_connection_labels=not hide_svg_labels,
+        )
 
     def parser_xmo(self, xmo_file: Path) -> 'XmoParsedData':
         '''
@@ -615,6 +626,7 @@ class autoVBMain:
                 self.draw_xmo2svg,
                 xmo_path,
                 self.input_data.vbsettings.xmo2svg,
+                self.input_data.vbsettings.hide_svg_labels,
             )
 
         if not self.input_data.vbsettings.nojson and hasattr(self, 'parsed_data'):

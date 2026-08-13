@@ -146,6 +146,44 @@ $end
     assert drawer_input.active_space[0].legend.endswith(": 1-3")
 
 
+def test_converter_can_hide_connection_labels(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        """
+$ctrl
+vbscf
+nae=2
+nao=2
+basis=6-31g
+$end
+
+$orb
+1*2
+1
+2
+$end
+
+$geo
+C 0.0 0.0 0.0
+C 1.0 0.0 0.0
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 1.00 ****** 1-2
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+    drawer_input = XmoToDrawerInputConverter(
+        parsed,
+        tmp_path,
+        hide_hydrogens=False,
+        show_connection_labels=False,
+    ).convert()
+
+    assert drawer_input.active_space[0].legend == "CC 1 w=1.00000"
+
+
 def test_drawer_renders_unpaired_electron_as_radical_dot(tmp_path):
     drawer = MoleculeBondVariantDrawer(
         xyz_file=tmp_path / "dummy.xyz",
@@ -267,3 +305,27 @@ H  1.2300 -0.9200 0.0000
     assert base_mol.GetNumAtoms() == 2
     assert base_mol.GetNumBonds() == 1
     assert base_mol.GetBondWithIdx(0).GetBondType() == Chem.BondType.DOUBLE
+
+
+def test_legend_font_size_prefers_large_text_and_shrinks_long_legends() -> None:
+    short_size = MoleculeBondVariantDrawer._legend_font_size(
+        "Lowdin 2 w=0.07160",
+        520,
+        390,
+    )
+    large_size = MoleculeBondVariantDrawer._legend_font_size(
+        "Lowdin 2 w=0.07160",
+        620,
+        460,
+    )
+    long_size = MoleculeBondVariantDrawer._legend_font_size("x" * 52, 520, 390)
+    r24_size = MoleculeBondVariantDrawer._legend_font_size(
+        "Lowdin 1 w=0.03884: 1-6 2-7 4-8 5-9",
+        520,
+        390,
+    )
+
+    assert short_size == 40
+    assert large_size == 47
+    assert r24_size == 30
+    assert 16 <= long_size < short_size

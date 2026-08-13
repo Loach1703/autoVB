@@ -43,6 +43,7 @@ class XmoToDrawerInputConverter:
         max_structures: int | None = None,
         baseline_index: int | None = None,
         weight_table: str = "cc",
+        show_connection_labels: bool = True,
     ) -> None:
         """初始化 XMO 到绘图输入的转换器。
 
@@ -55,6 +56,7 @@ class XmoToDrawerInputConverter:
                 当前权重表中权重最大的结构。
             weight_table: 使用哪一种权重表，`"cc"` 表示 `WEIGHTS OF STRUCTURES`，
                 `"lowdin"` 表示 `Lowdin Weights`。
+            show_connection_labels: 是否在图例中显示成键原子对和自由基位置。
         """
         self.parsed_data = parsed_data
         self.output_dir = Path(output_dir)
@@ -62,6 +64,7 @@ class XmoToDrawerInputConverter:
         self.max_structures = max_structures
         self.baseline_index = baseline_index
         self.weight_table = self._normalize_weight_table(weight_table)
+        self.show_connection_labels = show_connection_labels
 
     def convert(self) -> XmoDrawerInput:
         """执行转换，得到绘图器可直接使用的数据。
@@ -379,4 +382,7 @@ class XmoToDrawerInputConverter:
             radical_text = ",".join(str(atom) for atom in unpaired_atoms)
             pair_text = f"{pair_text} radical:{radical_text}".strip()
         table_label = "Lowdin" if self.weight_table == "lowdin" else "CC"
-        return f"{table_label} {weight.index} w={weight.weight:.5f}: {pair_text}"
+        legend = f"{table_label} {weight.index} w={weight.weight:.5f}"
+        if not self.show_connection_labels:
+            return legend
+        return f"{legend}: {pair_text}"

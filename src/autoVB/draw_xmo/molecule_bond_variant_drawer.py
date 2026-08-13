@@ -71,6 +71,8 @@ class MoleculeBondVariantDrawer:
     DEFAULT_ATOM_LABEL_COLOR = "#000000"
     DEFAULT_ATOM_LABEL_FONT_SIZE = 12.0
     DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 22.0
+    DEFAULT_LEGEND_MIN_FONT_SIZE = 16
+    DEFAULT_LEGEND_MAX_FONT_SIZE = 40
     DEFAULT_LONE_PAIR_DOT_RADIUS = 3.4
     DEFAULT_RADICAL_DOT_RADIUS = 4.0
     ATOM_LABEL_OFFSET = 13.0
@@ -569,6 +571,7 @@ class MoleculeBondVariantDrawer:
         """
         drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
         draw_options = drawer.drawOptions()
+        draw_options.legendFontSize = self._legend_font_size(legend, width, height)
         for atom in mol.GetAtoms():
             if atom.HasProp(self.CONDENSED_ATOM_LABEL_PROP):
                 draw_options.atomLabels[atom.GetIdx()] = atom.GetProp(
@@ -741,6 +744,22 @@ class MoleculeBondVariantDrawer:
             "<g class='atom-annotations'>\n" + "".join(annotation_parts) + "</g>\n"
         )
         return svg.replace("</svg>", annotations + "</svg>", 1)
+
+    @classmethod
+    def _legend_font_size(cls, legend: str, width: int, height: int) -> int:
+        """尽量放大图例，并在文字过长时按可用宽度缩小字号。"""
+        image_scale = min(width / 520, height / 390)
+        min_font_size = cls.DEFAULT_LEGEND_MIN_FONT_SIZE * image_scale
+        max_font_size = cls.DEFAULT_LEGEND_MAX_FONT_SIZE * image_scale
+        # k越小，字号越大
+        k = 0.4
+        estimated_size = width * 0.9 / (max(len(legend), 1) * k)
+        return round(
+            max(
+                min_font_size,
+                min(max_font_size, estimated_size),
+            )
+        )
 
     def _svg_lone_pair_dots(
         self,

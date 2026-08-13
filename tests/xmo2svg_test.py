@@ -15,6 +15,7 @@ from autoVB.main import VBSettings, autoVBMain
 
 def test_xmo2svg_workflow_setting_defaults_to_none():
     assert VBSettings().xmo2svg is None
+    assert VBSettings().hide_svg_labels is False
 
 
 def test_xmo2svg_workflow_setting_parses_projection():
@@ -27,6 +28,16 @@ def test_xmo2svg_workflow_setting_parses_projection():
     assert settings.xmo2svg == "optimized3d"
 
 
+def test_xmo2svg_workflow_setting_parses_hide_svg_labels():
+    parser = autoVBInputParser.__new__(autoVBInputParser)
+
+    settings = parser.parse_autovb_options(
+        "job autovb{xmo2svg=rdkit,hide_svg_labels}"
+    )
+
+    assert settings.hide_svg_labels is True
+
+
 def test_xmo2svg_workflow_setting_rejects_unknown_projection():
     with pytest.raises(ValueError, match="xmo2svg"):
         VBSettings(xmo2svg="unknown").validate()
@@ -37,9 +48,17 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake_xmo2svg_file(xmo_file, *, projection):
+    def fake_xmo2svg_file(
+        xmo_file,
+        *,
+        projection,
+        show_atom_labels,
+        show_connection_labels,
+    ):
         captured["xmo_file"] = xmo_file
         captured["projection"] = projection
+        captured["show_atom_labels"] = show_atom_labels
+        captured["show_connection_labels"] = show_connection_labels
         return "result"
 
     monkeypatch.setattr(
@@ -50,13 +69,38 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
     workflow = autoVBMain.__new__(autoVBMain)
     xmo_path = tmp_path / "sample.xmo"
 
-    result = workflow.draw_xmo2svg(xmo_path, "optimized3d")
+    result = workflow.draw_xmo2svg(
+        xmo_path,
+        "optimized3d",
+        hide_svg_labels=True,
+    )
 
     assert result == "result"
     assert captured == {
         "xmo_file": xmo_path,
         "projection": "optimized3d",
+        "show_atom_labels": False,
+        "show_connection_labels": False,
     }
+
+
+def test_xmo2svg_cli_hides_connection_labels(monkeypatch, tmp_path):
+    from autoVB.cli import xmo2svg as xmo2svg_module
+
+    captured = {}
+
+    def fake_xmo2svg_file(xmo_file, **kwargs):
+        captured["xmo_file"] = xmo_file
+        captured.update(kwargs)
+
+    monkeypatch.setattr(xmo2svg_module, "xmo2svg_file", fake_xmo2svg_file)
+    xmo_path = tmp_path / "sample.xmo"
+
+    assert xmo2svg_module.xmo2svg(
+        [str(xmo_path), "--hide-connection-labels"]
+    ) == 0
+    assert captured["show_connection_labels"] is False
+    assert captured["show_atom_labels"] is True
 
 
 def test_orbital_connectivity_keeps_close_molecules_separate(tmp_path):
