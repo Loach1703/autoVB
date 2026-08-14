@@ -190,6 +190,9 @@ Skips the XMVB calculation and generates only the input file. This option is rec
 ##### 2.3.3.8 nogvb
 Skips the GVB calculation and reads existing MOKIT output.
 
+##### 2.3.3.9 bovb_stream
+Applies only to the BOVB method. When enabled, autoVB first runs a VBSCF calculation using the `xxx_vb` base name, then uses the resulting `.orb` initial guess to generate `xxx_bovb.xmi` and run BOVB. Energies are parsed for both stages, with summaries written to `xxx_vb.json` and `xxx_bovb.json`. This option is ignored when `novb` is also enabled.
+
 #### 2.3.4 Plotting Parameters
 
 ##### 2.3.4.1 draw_xmo

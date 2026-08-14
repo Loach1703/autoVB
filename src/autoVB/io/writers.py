@@ -3,8 +3,9 @@ from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass
 import datetime
 import json
+import re
 
-from ..utils.constants import to_gaussian_basis_name
+from ..utils.constants import SUPPORTED_METHODS, to_gaussian_basis_name
 
 if TYPE_CHECKING:
     from ..main import XMIPassthrough, autoVBInputData
@@ -116,6 +117,119 @@ $end
 '''
     with open(xmi_path, 'w') as f:
         f.write(xmi_text)
+
+
+def write_xmi_with_orbital_guess(
+    xmi_text: str,
+    orb_text: str,
+    output: str | Path,
+    method: str | None = None,
+    iscf: int | None = None,
+) -> Path:
+    """替换 XMI 的轨道初猜，并保留其余内容。
+
+    Args:
+        xmi_text: 原始 XMI 文件文本。
+        orb_text: 新 ``.orb`` 文件文本，用于替换 ``$gus`` 主体。
+        output: 新 XMI 文件路径。
+        method: 可选的新计算方法，只替换 ``$ctrl`` 中原有的方法行。
+        iscf: 可选的新 ISCF 值，只替换 ``$ctrl`` 中原有的 ``iscf``。
+
+    Returns:
+        写出的 XMI 文件路径。
+    """
+    output_text = _replace_xmi_section_body(xmi_text, "gus", orb_text)
+    if method is not None:
+        output_text = _replace_xmi_method(output_text, method)
+    if iscf is not None:
+        output_text = _replace_xmi_ctrl_option(output_text, "iscf", str(iscf))
+
+    output_path = Path(output)
+    output_path.write_bytes(output_text.encode("utf-8"))
+    return output_path
+
+
+def _replace_xmi_section_body(text: str, section: str, body: str) -> str:
+    """替换指定 XMI section 的主体，保留 section 标记和其他文本。"""
+    section_pattern = re.compile(
+        rf"^(?P<header>[ \t]*\${re.escape(section)}[ \t]*\r?\n)"
+        rf"(?P<body>.*?)"
+        rf"(?P<footer>^[ \t]*\$end[ \t]*(?=\r?$))",
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    match = section_pattern.search(text)
+    if match is None:
+        raise ValueError(f"Failed to find ${section} section in XMI text.")
+
+    newline = "\r\n" if match.group("header").endswith("\r\n") else "\n"
+    normalized_body = body.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
+    normalized_body = normalized_body.replace("\n", newline) + newline
+    return (
+        text[: match.start("body")]
+        + normalized_body
+        + text[match.end("body") :]
+    )
+
+
+def _replace_xmi_method(text: str, method: str) -> str:
+    """只替换 XMI ``$ctrl`` 中的计算方法行。"""
+    ctrl_pattern = re.compile(
+        r"^(?P<header>[ \t]*\$ctrl[ \t]*\r?\n)"
+        r"(?P<body>.*?)"
+        r"(?P<footer>^[ \t]*\$end[ \t]*(?=\r?$))",
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    ctrl_match = ctrl_pattern.search(text)
+    if ctrl_match is None:
+        raise ValueError("Failed to find $ctrl section in XMI text.")
+
+    method_pattern = re.compile(
+        rf"^(?P<indent>[ \t]*)(?:{'|'.join(map(re.escape, SUPPORTED_METHODS))})"
+        r"(?P<trailing>[ \t]*)(?P<carriage>\r?)$",
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    ctrl_body, replacement_count = method_pattern.subn(
+        rf"\g<indent>{method}\g<trailing>\g<carriage>",
+        ctrl_match.group("body"),
+        count=1,
+    )
+    if replacement_count == 0:
+        raise ValueError("Failed to find method line in XMI $ctrl section.")
+    return (
+        text[: ctrl_match.start("body")]
+        + ctrl_body
+        + text[ctrl_match.end("body") :]
+    )
+
+
+def _replace_xmi_ctrl_option(text: str, key: str, value: str) -> str:
+    """替换 XMI ``$ctrl`` 中一个已有的 ``key=value`` 控制项。"""
+    ctrl_pattern = re.compile(
+        r"^(?P<header>[ \t]*\$ctrl[ \t]*\r?\n)"
+        r"(?P<body>.*?)"
+        r"(?P<footer>^[ \t]*\$end[ \t]*(?=\r?$))",
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    ctrl_match = ctrl_pattern.search(text)
+    if ctrl_match is None:
+        raise ValueError("Failed to find $ctrl section in XMI text.")
+
+    option_pattern = re.compile(
+        rf"(?<!\S){re.escape(key)}\s*=\s*\S+",
+        flags=re.IGNORECASE,
+    )
+    ctrl_body, replacement_count = option_pattern.subn(
+        f"{key}={value}",
+        ctrl_match.group("body"),
+        count=1,
+    )
+    if replacement_count == 0:
+        raise ValueError(f"Failed to find {key} in XMI $ctrl section.")
+    return (
+        text[: ctrl_match.start("body")]
+        + ctrl_body
+        + text[ctrl_match.end("body") :]
+    )
 
 
 def write_json_summary(

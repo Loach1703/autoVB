@@ -60,6 +60,7 @@ class VBSettings:
     stru: str = "default"
     sort: bool = False
     novb: bool = False
+    bovb_stream: bool = False
     nogvb: bool = False
     nojson: bool = False
     guess: str = "nbo"
@@ -223,8 +224,16 @@ class autoVBMain:
         self.nbo_gjf_name = f"{filename}_nbo"
         self.automr_gvb_name = f"{filename}_gvb"
         self.xmi_name = f"{filename}_vb"
+        self.bovb_name = f"{filename}_bovb"
         self.blw_name = f"{filename}_blw"
         self._check_environment()
+
+    def _use_bovb_stream(self) -> bool:
+        return (
+            self.input_data.method.lower() == 'bovb'
+            and self.input_data.vbsettings.bovb_stream
+            and not self.input_data.vbsettings.novb
+        )
 
     def _check_environment(self):
         # 检查各种环境变量，但不是每个软件都需要的
@@ -353,6 +362,10 @@ class autoVBMain:
             xmi_path = Path(f"{self.xmi_name}.xmi")
             log_subroutine(f"Entry write .xmi file")
             xmidata = wxp.get_xmidata()
+
+        if self._use_bovb_stream():
+            xmidata.method = 'vbscf'
+            xmidata.iscf = 5
         
         passthrough = self.input_data.xmi_passthrough
         write_xmi_file(xmi_path, xmidata, passthrough)
@@ -367,6 +380,9 @@ class autoVBMain:
         xg.set_basis_set(self.input_data.basis)
         xmi_path = Path(f"{self.xmi_name}.xmi")
         xmidata = xg.get_xmidata()
+        if self._use_bovb_stream():
+            xmidata.method = 'vbscf'
+            xmidata.iscf = 5
         write_xmi_file(xmi_path, xmidata, self.input_data.xmi_passthrough)
         logger.info(f"Generated XMVB input file {xmi_path} successfully from GVB orbitals.")
 
@@ -391,11 +407,12 @@ class autoVBMain:
         automr_cmd = f"{self.automr_exe} {self.automr_gvb_name}.gjf 1>{self.automr_gvb_name}.out 2>{self.automr_gvb_name}.err"
         self.run_subprocess_command(automr_cmd, f"MOKIT automr GVB execution completed successfully for {self.automr_gvb_name}.gjf.", f"MOKIT automr GVB execution failed for {self.automr_gvb_name}.gjf, check {self.automr_gvb_name}.out and {self.automr_gvb_name}.err for details.")
 
-    def run_xmvb(self):
-        if self.input_data.method.lower() == 'blw':
-            filename = self.blw_name
-        else:
-            filename = self.xmi_name
+    def run_xmvb(self, filename: str | None = None):
+        if filename is None:
+            if self.input_data.method.lower() == 'blw':
+                filename = self.blw_name
+            else:
+                filename = self.xmi_name
         xmvb_cmd = f"{self.xmvb_exe} -n {self.input_data.nproc} {filename}.xmi 1> {filename}.xmo  2> {filename}.err"
         self.run_subprocess_command(xmvb_cmd, f"XMVB execution completed successfully for {filename}.xmi.", f"XMVB execution failed for {filename}.xmi, check {filename}.xmo for details.")
 
@@ -482,7 +499,7 @@ class autoVBMain:
             show_connection_labels=not hide_svg_labels,
         )
 
-    def parser_xmo(self, xmo_file: Path) -> 'XmoParsedData':
+    def parser_xmo(self, xmo_file: Path, method: str | None = None) -> 'XmoParsedData':
         '''
         解析XMVB输出文件，提取相关信息。
         Args:
@@ -493,7 +510,7 @@ class autoVBMain:
         from .io.xmo_output_parser import XmoParser
         logger.info(f"Parsing XMVB output file {xmo_file} to extract information...")
         self.parsed_data = XmoParser(xmo_file).parse()
-        method = self.input_data.method.upper()
+        method = (method or self.input_data.method).upper()
 
         if self.parsed_data.converged is True:
             logger.info(
@@ -512,10 +529,14 @@ class autoVBMain:
                 f"Could not determine whether {method} converged "
                 f"with ({self.parsed_data.nae},{self.parsed_data.nao}) active space."
             )
-        self._log_xmo_energy_summary(self.parsed_data)
+        self._log_xmo_energy_summary(self.parsed_data, method)
         return self.parsed_data
 
-    def _log_xmo_energy_summary(self, parsed_data: 'XmoParsedData') -> None:
+    def _log_xmo_energy_summary(
+        self,
+        parsed_data: 'XmoParsedData',
+        method: str | None = None,
+    ) -> None:
         '''
         记录XMVB能量摘要信息，根据不同的方法（VBPT2, LAM-DFVB等）记录不同的能量项。
         Args:
@@ -523,7 +544,7 @@ class autoVBMain:
         Returns:
             None
         '''
-        method = self.input_data.method.upper()
+        method = (method or self.input_data.method).upper()
         energy_labels = {
             "vbscf_energy": "VBSCF Energy",
             "total_energy": "Total Energy",
@@ -558,6 +579,53 @@ class autoVBMain:
                 value = parsed_data.energy_terms[key]
                 unit = "" if key == "lambda_parameter" else " a.u."
                 logger.info(f"{energy_labels[key]} = {value:.8f}{unit}")
+
+    def run_bovb_stream(self) -> Path:
+        """先运行 VBSCF，再用收敛轨道生成并运行 BOVB 输入。"""
+        from .cli.xmo2xmi import xmo2xmi_file
+        from .io.writers import write_json_summary
+
+        vbscf_xmo = Path(f"{self.xmi_name}.xmo")
+        bovb_xmo = Path(f"{self.bovb_name}.xmo")
+
+        log_subroutine("Entry XMVB VBSCF Calculation")
+        self.timed_call("run_xmvb_vbscf", self.run_xmvb, self.xmi_name)
+        vbscf_data = self.timed_call(
+            "parser_xmo_vbscf", self.parser_xmo, vbscf_xmo, "vbscf"
+        )
+        if not self.input_data.vbsettings.nojson:
+            self.timed_call(
+                "write_vbscf_json_summary",
+                write_json_summary,
+                self.input_data,
+                vbscf_data,
+                Path(f"{self.xmi_name}.json"),
+            )
+
+        log_subroutine("Entry VBSCF to BOVB Conversion")
+        self.timed_call(
+            "xmo2xmi_bovb",
+            xmo2xmi_file,
+            Path(f"{self.xmi_name}.xmi"),
+            Path(f"{self.bovb_name}.xmi"),
+            "bovb",
+            2,
+        )
+
+        log_subroutine("Entry XMVB BOVB Calculation")
+        self.timed_call("run_xmvb_bovb", self.run_xmvb, self.bovb_name)
+        bovb_data = self.timed_call(
+            "parser_xmo_bovb", self.parser_xmo, bovb_xmo, "bovb"
+        )
+        if not self.input_data.vbsettings.nojson:
+            self.timed_call(
+                "write_bovb_json_summary",
+                write_json_summary,
+                self.input_data,
+                bovb_data,
+                Path(f"{self.bovb_name}.json"),
+            )
+        return bovb_xmo
 
     def timed_call(self, step_name: str, func, *args, **kwargs):
         step_start = datetime.datetime.now()
@@ -597,7 +665,13 @@ class autoVBMain:
             self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
 
         self.wxp = self.read_nbo()
-        xmo_path = Path(f"{self.xmi_name}.xmo") if self.input_data.method.lower() != 'blw' else Path(f"{self.blw_name}.xmo")
+        bovb_stream = self._use_bovb_stream()
+        if bovb_stream:
+            xmo_path = Path(f"{self.bovb_name}.xmo")
+        elif self.input_data.method.lower() == 'blw':
+            xmo_path = Path(f"{self.blw_name}.xmo")
+        else:
+            xmo_path = Path(f"{self.xmi_name}.xmo")
         # 生成 .xmi 文件
         if self.input_data.vbsettings.guess == 'gvb':
             log_subroutine("Entry GVB to XMI Conversion")
@@ -613,8 +687,11 @@ class autoVBMain:
             log_subroutine("Entry XMVB Calculation")
             if not self.xmvb_exe:
                 raise EnvironmentError("XMVB executable not found in environment. Please install XMVB and ensure it is in your PATH.")
-            self.timed_call("run_xmvb", self.run_xmvb)
-            self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
+            if bovb_stream:
+                xmo_path = self.run_bovb_stream()
+            else:
+                self.timed_call("run_xmvb", self.run_xmvb)
+                self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
 
         # draw_xmo 调用
         if self.input_data.vbsettings.draw_xmo:
@@ -639,7 +716,11 @@ class autoVBMain:
                 self.input_data.vbsettings.svgweight,
             )
 
-        if not self.input_data.vbsettings.nojson and hasattr(self, 'parsed_data'):
+        if (
+            not self.input_data.vbsettings.nojson
+            and hasattr(self, 'parsed_data')
+            and not bovb_stream
+        ):
             from .io.writers import write_json_summary
             self.timed_call("write_json_summary", write_json_summary, self.input_data, self.parsed_data)
 

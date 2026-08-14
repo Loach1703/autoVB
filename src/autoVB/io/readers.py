@@ -18,6 +18,27 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def read_xmi_and_orb(
+    xmi_file: str | Path,
+    orb_file: str | Path | None = None,
+) -> tuple[str, str]:
+    """读取 XMI 模板和用于替换初猜的 ORB 文件。
+
+    Args:
+        xmi_file: 需要保留主体内容的 ``.xmi`` 文件。
+        orb_file: 新轨道初猜文件；默认读取与 XMI 同名的 ``.orb`` 文件。
+
+    Returns:
+        ``(xmi_text, orb_text)``。
+    """
+    xmi_path = Path(xmi_file)
+    orb_path = Path(orb_file) if orb_file is not None else xmi_path.with_suffix(".orb")
+    return (
+        xmi_path.read_bytes().decode("utf-8"),
+        orb_path.read_bytes().decode("utf-8"),
+    )
+
+
 class autoVBInputParser:
     '''
     解析输入文件，提取必要的信息，如分子结构、基组、计算参数等
@@ -107,10 +128,9 @@ class autoVBInputParser:
         debug = False
 
         ctrl_lines = sections.get("ctrl", [[]])[0] if sections.get("ctrl") else []
-        for raw_line in ctrl_lines:
-            s = raw_line.strip()
-            if not s:
-                continue
+        ctrl_tokens = "\n".join(ctrl_lines).split()
+        for token in ctrl_tokens:
+            s = token.strip()
 
             if "=" in s:
                 key, value = s.split("=", 1)
@@ -119,6 +139,10 @@ class autoVBInputParser:
                 key_lower = key.lower()
                 mapped_key = alias_map.get(key_lower, key_lower)
 
+                if key_lower in SUPPORTED_METHODS:
+                    if method is None:
+                        method = key_lower
+                    continue
                 if mapped_key == "basis":
                     basis = value
                     continue
@@ -135,7 +159,7 @@ class autoVBInputParser:
                         logger.warning(f"failed to parse $ctrl key '{key}' with value '{value}': {e}")
                     continue
 
-                passthrough.ctrl_extra_lines.append(raw_line)
+                passthrough.ctrl_extra_lines.append(token)
                 continue
 
             # 无等号的开关型字段，例如 sort
@@ -156,7 +180,7 @@ class autoVBInputParser:
                 except Exception as e:
                     logger.warning(f"failed to parse flag field '{s}' in $ctrl: {e}")
             else:
-                passthrough.ctrl_extra_lines.append(raw_line)
+                passthrough.ctrl_extra_lines.append(token)
 
         if method is None:
             raise ValueError(f"Failed to parse method from $ctrl section in {self.input_path}")
