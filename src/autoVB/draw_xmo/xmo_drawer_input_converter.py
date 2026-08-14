@@ -18,7 +18,7 @@ class XmoDrawerInput:
         baseline_unpaired_atoms: 基准价键结构中的未成对电子原子。
         active_space: 需要绘制的价键结构列表。
         orbital_to_atom: XMVb 活性轨道编号到绘图原子编号的映射。
-        weight_table: 当前使用的权重表，取值为 `"cc"` 或 `"lowdin"`。
+        weight_table: 当前使用的权重表，取值为 `"cc"`、`"lowdin"` 或 `"both"`。
     """
 
     xyz_file: Path
@@ -55,7 +55,8 @@ class XmoToDrawerInputConverter:
             baseline_index: 作为初始电子排布基准的权重序号；`None` 表示使用
                 当前权重表中权重最大的结构。
             weight_table: 使用哪一种权重表，`"cc"` 表示 `WEIGHTS OF STRUCTURES`，
-                `"lowdin"` 表示 `Lowdin Weights`。
+                `"lowdin"` 表示 `Lowdin Weights`，`"both"` 同时显示两者并按
+                Lowdin 权重选择结构。
             show_connection_labels: 是否在图例中显示成键原子对和自由基位置。
         """
         self.parsed_data = parsed_data
@@ -218,9 +219,9 @@ class XmoToDrawerInputConverter:
         """根据 `weight_table` 返回当前要使用的权重表。
 
         Returns:
-            CC 权重或 Lowdin 权重列表。
+            CC 权重或 Lowdin 权重列表；`both` 模式返回 Lowdin 权重列表。
         """
-        if self.weight_table == "lowdin":
+        if self.weight_table in {"lowdin", "both"}:
             return self.parsed_data.lowdin_weights
         return self.parsed_data.cc_weights
 
@@ -235,13 +236,14 @@ class XmoToDrawerInputConverter:
             标准化后的权重表名称。
 
         Raises:
-            ValueError: 权重表名称不是 `"cc"` 或 `"lowdin"`。
+            ValueError: 权重表名称不是 `"cc"`、`"lowdin"` 或 `"both"`。
         """
         normalized_name = weight_table.strip().lower()
-        if normalized_name in {"cc", "lowdin"}:
+        if normalized_name in {"cc", "lowdin", "both"}:
             return normalized_name
         raise ValueError(
-            f"weight_table must be 'cc' or 'lowdin', but got {weight_table!r}."
+            "weight_table must be 'cc', 'lowdin', or 'both', "
+            f"but got {weight_table!r}."
         )
 
     def _weight_to_structure_info(
@@ -381,8 +383,19 @@ class XmoToDrawerInputConverter:
         if unpaired_atoms:
             radical_text = ",".join(str(atom) for atom in unpaired_atoms)
             pair_text = f"{pair_text} radical:{radical_text}".strip()
-        table_label = "Lowdin" if self.weight_table == "lowdin" else "CC"
-        legend = f"{table_label} {weight.index} w={weight.weight:.5f}"
+        if self.weight_table == "both":
+            cc_weight = next(
+                item.weight
+                for item in self.parsed_data.cc_weights
+                if item.index == weight.index
+            )
+            legend = (
+                f"CC {weight.index} w={cc_weight:.5f}\n"
+                f"Lowdin {weight.index} w={weight.weight:.5f}"
+            )
+        else:
+            table_label = "Lowdin" if self.weight_table == "lowdin" else "CC"
+            legend = f"{table_label} {weight.index} w={weight.weight:.5f}"
         if not self.show_connection_labels:
             return legend
         return f"{legend}: {pair_text}"

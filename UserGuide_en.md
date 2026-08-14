@@ -119,7 +119,7 @@ Explicitly specifies the number of active electrons. If omitted, `autoVB` select
 Explicitly specifies the number of active orbitals. If omitted, `autoVB` selects the active space automatically from the NBO occupation numbers.
 
 ##### 2.3.1.3 aoa=(n1, n2, ...)
-Specifies the Active Orbital Atom sequence, i.e., the indices of the atoms involved in the active space. For example, `aoa=(1,2,3,4)` automatically searches for NBOs on atoms 1 through 4 and uses them as active orbitals. Atom indices are one-based integers in the range `[1, number of atoms]`. For an `.xmi` input file, this parameter uses the data in the `$actorb` block; see the [input file examples](#21-input-file-examples).
+Specifies the Active Orbital Atom sequence, with `aat` as an alias, i.e., the indices of the atoms involved in the active space. For example, `aoa=(1,2,3,4)` or `aat=(1,2,3,4)` automatically searches for NBOs on atoms 1 through 4 and uses them as active orbitals. Atom indices are one-based integers in the range `[1, number of atoms]`. For an `.xmi` input file, this parameter uses the data in the `$actorb` block; see the [input file examples](#21-input-file-examples).
 
 ##### 2.3.1.4 aoi=(n1, n2, ...)
 Specifies the Active Orbital Indices. The one-based indices of the NBOs used in the active space are given directly. For example, `aoi=(1,2,3,4)` selects NBOs 1 through 4 as active orbitals.
@@ -217,7 +217,14 @@ autovb{xmo2svg=rdkit,hide_svg_labels}
 
 This is equivalent to passing both `--hide-atom-labels` and `--hide-connection-labels` to the standalone command-line tool.
 
-##### 2.3.4.4 draw_rumer
+##### 2.3.4.4 svgweight
+Selects the structure weights displayed in the `xmo2svg` image. Supported values are `cc`, `lowdin`, and `both`; the default is `both`. With `both`, the CC and Lowdin weights are shown on separate lines, while structures are still selected and sorted by Lowdin weight. For example:
+
+```text
+autovb{xmo2svg=optimized3d,svgweight=both}
+```
+
+##### 2.3.4.5 draw_rumer
 Generates a molecular `.svg` image when the selected active-space atoms are ordered topologically according to the Rumer rule.
 
 #### 2.3.5 Other Parameters

@@ -38,7 +38,7 @@ def autovb_xmi(argv=None):
     parser.add_argument("--threshold", "-t", type=float, default=1.96, help="threshold for selecting important structures based on cc weight, default 1.96 (corresponding to 95%% cumulative weight)")
     parser.add_argument("--active_electron", "-nae", type=int, default=0, help="number of active electrons, default 0")
     parser.add_argument("--active_orbital", "-nao", type=int, default=0, help="number of active orbitals, default 0")
-    parser.add_argument("--active_orbital_atom", "-aoa", nargs='*', type=int, default=[], help="list of active orbital atoms, default empty")
+    parser.add_argument("--active_orbital_atom", "-aoa", "-aat", nargs='*', type=int, default=[], help="list of active orbital atoms, default empty")
     args = parser.parse_args(argv)
 
     p: Path = args.file

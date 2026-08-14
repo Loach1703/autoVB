@@ -73,8 +73,11 @@ class MoleculeBondVariantDrawer:
     DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 22.0
     DEFAULT_LEGEND_MIN_FONT_SIZE = 16
     DEFAULT_LEGEND_MAX_FONT_SIZE = 40
+    DEFAULT_LEGEND_LINE_GAP = 6.0
     DEFAULT_LONE_PAIR_DOT_RADIUS = 3.4
     DEFAULT_RADICAL_DOT_RADIUS = 4.0
+    CHARGE_LABEL_COLLISION_MARGIN = 2.0
+    CHARGE_LABEL_TEXT_WIDTH_FACTOR = 0.65
     ATOM_LABEL_OFFSET = 13.0
     CHARGE_LABEL_OFFSET = 20.0
     LONE_PAIR_OFFSET = 23.0
@@ -572,6 +575,7 @@ class MoleculeBondVariantDrawer:
         drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
         draw_options = drawer.drawOptions()
         draw_options.legendFontSize = self._legend_font_size(legend, width, height)
+        draw_options.legendFraction = 0.1 * max(len(legend.splitlines()), 1)
         for atom in mol.GetAtoms():
             if atom.HasProp(self.CONDENSED_ATOM_LABEL_PROP):
                 draw_options.atomLabels[atom.GetIdx()] = atom.GetProp(
@@ -582,6 +586,7 @@ class MoleculeBondVariantDrawer:
         drawer.FinishDrawing()
 
         svg = drawer.GetDrawingText()
+        svg = self._increase_multiline_legend_spacing(svg, legend, width, height)
         if self.color_active_space:
             svg = self._color_upgraded_bond_lines_in_svg(
                 svg,
@@ -717,20 +722,29 @@ class MoleculeBondVariantDrawer:
             self.charge_note_scale
         )
         charge_label_offset = self._charge_label_offset(atom_coords, charge_font_size)
+        atom_label_bboxes = self._svg_atom_label_bboxes(svg)
+        svg_obstacle_bboxes = list(atom_label_bboxes.values())
+        svg_obstacle_bboxes.extend(self._svg_bond_bboxes(svg))
+        charge_label_bboxes: list[tuple[float, float, float, float]] = []
         for atom_idx, note in charge_notes.items():
             atom_coord = atom_coords[atom_idx]
+            charge_position, charge_bbox = self._charge_label_position(
+                note,
+                atom_coord,
+                centroid,
+                charge_label_offset,
+                charge_font_size,
+                width,
+                height,
+                svg_obstacle_bboxes,
+                charge_label_bboxes,
+            )
+            charge_label_bboxes.append(charge_bbox)
             annotation_parts.append(
                 self._svg_text_label(
                     css_class=f"charge-label atom-{atom_idx}",
                     text=note,
-                    position=self._label_position(
-                        atom_coord,
-                        centroid,
-                        charge_label_offset,
-                        charge_font_size,
-                        width,
-                        height,
-                    ),
+                    position=charge_position,
                     color=self.active_space_color,
                     font_size=charge_font_size,
                     font_weight="700",
@@ -753,13 +767,54 @@ class MoleculeBondVariantDrawer:
         max_font_size = cls.DEFAULT_LEGEND_MAX_FONT_SIZE * image_scale
         # k越小，字号越大
         k = 0.4
-        estimated_size = width * 0.9 / (max(len(legend), 1) * k)
+        longest_line_length = max(
+            (len(line) for line in legend.splitlines()),
+            default=1,
+        )
+        estimated_size = width * 0.9 / (longest_line_length * k)
         return round(
             max(
                 min_font_size,
                 min(max_font_size, estimated_size),
             )
         )
+
+    @classmethod
+    def _increase_multiline_legend_spacing(
+        cls,
+        svg: str,
+        legend: str,
+        width: int,
+        height: int,
+    ) -> str:
+        """把多行 RDKit 图例的后续行稍微下移，增加行间距。"""
+        legend_lines = legend.splitlines()
+        if len(legend_lines) < 2:
+            return svg
+
+        path_matches = list(
+            re.finditer(r"<path class='legend'[^>]*/>", svg)
+        )
+        image_scale = min(width / 520, height / 390)
+        path_index = 0
+        replacements: list[tuple[int, int, str]] = []
+        for line_index, line in enumerate(legend_lines):
+            line_offset = cls.DEFAULT_LEGEND_LINE_GAP * image_scale * line_index
+            for path_match in path_matches[path_index : path_index + len(line)]:
+                if line_index > 0:
+                    path_text = path_match.group(0).replace(
+                        "<path ",
+                        f"<path transform='translate(0,{line_offset:.1f})' ",
+                        1,
+                    )
+                    replacements.append(
+                        (path_match.start(), path_match.end(), path_text)
+                    )
+            path_index += len(line)
+
+        for start, end, replacement in reversed(replacements):
+            svg = svg[:start] + replacement + svg[end:]
+        return svg
 
     def _svg_lone_pair_dots(
         self,
@@ -1036,6 +1091,275 @@ class MoleculeBondVariantDrawer:
         min_offset = font_size * 0.40
         max_offset = font_size * 0.80
         return self._clamp(raw_offset, min_offset, max_offset)
+
+    @classmethod
+    def _svg_atom_label_bboxes(
+        cls,
+        svg: str,
+    ) -> dict[int, tuple[float, float, float, float]]:
+        """从 RDKit SVG 中读取每个原子字形的实际包围盒。"""
+        atom_bboxes: dict[int, tuple[float, float, float, float]] = {}
+        for path_match in re.finditer(r"<path\b[^>]*>", svg):
+            path_tag = path_match.group(0)
+            attributes = cls._svg_tag_attributes(path_tag)
+            atom_match = re.fullmatch(r"atom-(\d+)", attributes.get("class", ""))
+            if atom_match is None or "d" not in attributes:
+                continue
+
+            path_bbox = cls._svg_path_bbox(attributes["d"])
+            if path_bbox is None:
+                continue
+
+            atom_idx = int(atom_match.group(1))
+            if atom_idx in atom_bboxes:
+                atom_bboxes[atom_idx] = cls._merge_bboxes(
+                    atom_bboxes[atom_idx],
+                    path_bbox,
+                )
+            else:
+                atom_bboxes[atom_idx] = path_bbox
+        return atom_bboxes
+
+    @classmethod
+    def _svg_bond_bboxes(
+        cls,
+        svg: str,
+    ) -> list[tuple[float, float, float, float]]:
+        """从 RDKit SVG 中读取键线路径的包围盒。"""
+        bond_bboxes: list[tuple[float, float, float, float]] = []
+        for path_match in re.finditer(r"<path\b[^>]*>", svg):
+            attributes = cls._svg_tag_attributes(path_match.group(0))
+            css_classes = attributes.get("class", "").split()
+            if not any(re.fullmatch(r"bond-\d+", name) for name in css_classes):
+                continue
+            if "d" not in attributes:
+                continue
+
+            path_bbox = cls._svg_path_bbox(attributes["d"])
+            if path_bbox is None:
+                continue
+            stroke_match = re.search(
+                r"stroke-width:\s*([\d.]+)px",
+                attributes.get("style", ""),
+            )
+            half_stroke_width = (
+                float(stroke_match.group(1)) / 2.0
+                if stroke_match is not None
+                else 1.0
+            )
+            bond_bboxes.append(
+                (
+                    path_bbox[0] - half_stroke_width,
+                    path_bbox[1] - half_stroke_width,
+                    path_bbox[2] + half_stroke_width,
+                    path_bbox[3] + half_stroke_width,
+                )
+            )
+        return bond_bboxes
+
+    @staticmethod
+    def _svg_tag_attributes(path_tag: str) -> dict[str, str]:
+        """读取一个 SVG 标签中的属性。"""
+        return {
+            match.group(1): match.group(3)
+            for match in re.finditer(
+                r"([\w:-]+)\s*=\s*(['\"])(.*?)\2",
+                path_tag,
+                flags=re.DOTALL,
+            )
+        }
+
+    @staticmethod
+    def _svg_path_bbox(
+        path_data: str,
+    ) -> tuple[float, float, float, float] | None:
+        """用 SVG 路径中的端点和控制点计算包围盒。"""
+        values = [
+            float(value)
+            for value in re.findall(
+                r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+                path_data,
+            )
+        ]
+        if len(values) < 2:
+            return None
+
+        x_values = values[0::2]
+        y_values = values[1::2]
+        return (
+            min(x_values),
+            min(y_values),
+            max(x_values),
+            max(y_values),
+        )
+
+    @staticmethod
+    def _merge_bboxes(
+        first: tuple[float, float, float, float],
+        second: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        """合并两个 SVG 包围盒。"""
+        return (
+            min(first[0], second[0]),
+            min(first[1], second[1]),
+            max(first[2], second[2]),
+            max(first[3], second[3]),
+        )
+
+    def _charge_label_position(
+        self,
+        note: str,
+        atom_coord: tuple[float, float],
+        centroid: tuple[float, float],
+        distance: float,
+        font_size: float,
+        width: int,
+        height: int,
+        svg_obstacle_bboxes: Sequence[tuple[float, float, float, float]],
+        charge_bboxes: Sequence[tuple[float, float, float, float]],
+    ) -> tuple[
+        tuple[float, float],
+        tuple[float, float, float, float],
+    ]:
+        """优先向外放置电荷，重合时尝试更远和侧向位置。"""
+        text_width = max(
+            font_size * self.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+            len(note) * font_size * self.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        )
+        text_height = font_size
+        obstacles = list(svg_obstacle_bboxes) + list(charge_bboxes)
+        preferred_position = self._label_position(
+            atom_coord,
+            centroid,
+            distance,
+            font_size,
+            width,
+            height,
+        )
+        preferred_bbox = self._text_bbox(
+            preferred_position,
+            text_width,
+            text_height,
+        )
+        if not self._bbox_collides(preferred_bbox, obstacles):
+            return preferred_position, preferred_bbox
+
+        x_delta = atom_coord[0] - centroid[0]
+        y_delta = atom_coord[1] - centroid[1]
+        length = math.hypot(x_delta, y_delta)
+        if length == 0:
+            x_unit, y_unit = 0.7, -0.7
+        else:
+            x_unit, y_unit = x_delta / length, y_delta / length
+
+        candidates: list[
+            tuple[
+                tuple[float, float],
+                tuple[float, float, float, float],
+            ]
+        ] = []
+        distances = (
+            distance,
+            distance + font_size * 0.5,
+            distance + font_size,
+        )
+        for angle in (0.0, -45.0, 45.0, -90.0, 90.0):
+            radians = math.radians(angle)
+            direction_x = x_unit * math.cos(radians) - y_unit * math.sin(radians)
+            direction_y = x_unit * math.sin(radians) + y_unit * math.cos(radians)
+            for candidate_distance in distances:
+                position = self._bounded_text_position(
+                    atom_coord[0] + direction_x * candidate_distance,
+                    atom_coord[1] + direction_y * candidate_distance,
+                    text_width,
+                    text_height,
+                    width,
+                    height,
+                )
+                bbox = self._text_bbox(position, text_width, text_height)
+                if not self._bbox_collides(bbox, obstacles):
+                    return position, bbox
+                candidates.append((position, bbox))
+
+        return min(
+            candidates,
+            key=lambda candidate: self._bbox_overlap_area(
+                candidate[1],
+                obstacles,
+            ),
+        )
+
+    @classmethod
+    def _bounded_text_position(
+        cls,
+        x_pos: float,
+        y_pos: float,
+        text_width: float,
+        text_height: float,
+        width: int,
+        height: int,
+    ) -> tuple[float, float]:
+        """把文字中心限制在画布内，同时保留完整文字宽高。"""
+        half_width = text_width / 2.0
+        half_height = text_height / 2.0
+        return (
+            cls._clamp(x_pos, half_width, width - half_width),
+            cls._clamp(y_pos, half_height, height - half_height),
+        )
+
+    @staticmethod
+    def _text_bbox(
+        position: tuple[float, float],
+        text_width: float,
+        text_height: float,
+    ) -> tuple[float, float, float, float]:
+        """根据 SVG 文本中心和估算尺寸生成包围盒。"""
+        half_width = text_width / 2.0
+        half_height = text_height / 2.0
+        return (
+            position[0] - half_width,
+            position[1] - half_height,
+            position[0] + half_width,
+            position[1] + half_height,
+        )
+
+    def _bbox_collides(
+        self,
+        bbox: tuple[float, float, float, float],
+        obstacles: Sequence[tuple[float, float, float, float]],
+    ) -> bool:
+        """判断包围盒是否与任一 SVG 字形重合。"""
+        margin = self.CHARGE_LABEL_COLLISION_MARGIN
+        return any(
+            bbox[0] < obstacle[2] + margin
+            and bbox[2] > obstacle[0] - margin
+            and bbox[1] < obstacle[3] + margin
+            and bbox[3] > obstacle[1] - margin
+            for obstacle in obstacles
+        )
+
+    @classmethod
+    def _bbox_overlap_area(
+        cls,
+        bbox: tuple[float, float, float, float],
+        obstacles: Sequence[tuple[float, float, float, float]],
+    ) -> float:
+        """计算候选电荷包围盒与所有障碍包围盒的重合面积。"""
+        margin = cls.CHARGE_LABEL_COLLISION_MARGIN
+        overlap_area = 0.0
+        for obstacle in obstacles:
+            overlap_width = max(
+                0.0,
+                min(bbox[2], obstacle[2] + margin)
+                - max(bbox[0], obstacle[0] - margin),
+            )
+            overlap_height = max(
+                0.0,
+                min(bbox[3], obstacle[3] + margin)
+                - max(bbox[1], obstacle[1] - margin),
+            )
+            overlap_area += overlap_width * overlap_height
+        return overlap_area
 
     @staticmethod
     def _typical_nearest_atom_distance(

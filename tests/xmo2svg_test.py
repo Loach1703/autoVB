@@ -15,6 +15,7 @@ from autoVB.main import VBSettings, autoVBMain
 
 def test_xmo2svg_workflow_setting_defaults_to_none():
     assert VBSettings().xmo2svg is None
+    assert VBSettings().svgweight == "both"
     assert VBSettings().hide_svg_labels is False
 
 
@@ -28,6 +29,16 @@ def test_xmo2svg_workflow_setting_parses_projection():
     assert settings.xmo2svg == "optimized3d"
 
 
+def test_xmo2svg_workflow_setting_parses_weight_table():
+    parser = autoVBInputParser.__new__(autoVBInputParser)
+
+    settings = parser.parse_autovb_options(
+        "job autoVB{xmo2svg=rdkit,svgweight=cc}"
+    )
+
+    assert settings.svgweight == "cc"
+
+
 def test_xmo2svg_workflow_setting_parses_hide_svg_labels():
     parser = autoVBInputParser.__new__(autoVBInputParser)
 
@@ -38,9 +49,25 @@ def test_xmo2svg_workflow_setting_parses_hide_svg_labels():
     assert settings.hide_svg_labels is True
 
 
+def test_autovb_input_accepts_aat_as_aoa_alias():
+    parser = autoVBInputParser.__new__(autoVBInputParser)
+
+    settings = parser.parse_autovb_options(
+        "job autovb{aat=(1,3,5)}"
+    )
+
+    assert settings.aoa == [1, 3, 5]
+    assert settings.active_order == "aoa"
+
+
 def test_xmo2svg_workflow_setting_rejects_unknown_projection():
     with pytest.raises(ValueError, match="xmo2svg"):
         VBSettings(xmo2svg="unknown").validate()
+
+
+def test_xmo2svg_workflow_setting_rejects_unknown_weight_table():
+    with pytest.raises(ValueError, match="svgweight"):
+        VBSettings(svgweight="unknown").validate()
 
 
 def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
@@ -54,11 +81,13 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
         projection,
         show_atom_labels,
         show_connection_labels,
+        weight_table,
     ):
         captured["xmo_file"] = xmo_file
         captured["projection"] = projection
         captured["show_atom_labels"] = show_atom_labels
         captured["show_connection_labels"] = show_connection_labels
+        captured["weight_table"] = weight_table
         return "result"
 
     monkeypatch.setattr(
@@ -81,6 +110,7 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
         "projection": "optimized3d",
         "show_atom_labels": False,
         "show_connection_labels": False,
+        "weight_table": "both",
     }
 
 
@@ -101,6 +131,24 @@ def test_xmo2svg_cli_hides_connection_labels(monkeypatch, tmp_path):
     ) == 0
     assert captured["show_connection_labels"] is False
     assert captured["show_atom_labels"] is True
+
+
+def test_xmo2svg_cli_accepts_both_weight_tables(monkeypatch, tmp_path):
+    from autoVB.cli import xmo2svg as xmo2svg_module
+
+    captured = {}
+
+    def fake_xmo2svg_file(xmo_file, **kwargs):
+        captured["xmo_file"] = xmo_file
+        captured.update(kwargs)
+
+    monkeypatch.setattr(xmo2svg_module, "xmo2svg_file", fake_xmo2svg_file)
+    xmo_path = tmp_path / "sample.xmo"
+
+    assert xmo2svg_module.xmo2svg(
+        [str(xmo_path), "--weight", "both"]
+    ) == 0
+    assert captured["weight_table"] == "both"
 
 
 def test_orbital_connectivity_keeps_close_molecules_separate(tmp_path):

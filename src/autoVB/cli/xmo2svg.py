@@ -112,9 +112,12 @@ def xmo2svg(argv=None) -> int:
     parser.add_argument(
         "--weight",
         "-w",
-        choices=("lowdin", "cc"),
+        choices=("lowdin", "cc", "both"),
         default=DEFAULT_XMO_WEIGHT_TABLE,
-        help=f"weight table to use, default: {DEFAULT_XMO_WEIGHT_TABLE}",
+        help=(
+            "weight table to display; both uses Lowdin weights for selection "
+            f"and displays both values, default: {DEFAULT_XMO_WEIGHT_TABLE}"
+        ),
     )
     parser.add_argument(
         "--max-structures",

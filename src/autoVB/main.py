@@ -67,6 +67,7 @@ class VBSettings:
     nbo_file: Path = None
     draw_xmo: bool = False
     xmo2svg: Optional[str] = None
+    svgweight: str = "both"
     hide_svg_labels: bool = False
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
@@ -112,6 +113,12 @@ class VBSettings:
                     "VBSettings: 'xmo2svg' must be 'rdkit', 'pca', "
                     "'optimized3d', 'contact', or None"
                 )
+
+        self.svgweight = self.svgweight.strip().lower()
+        if self.svgweight not in ("cc", "lowdin", "both"):
+            raise ValueError(
+                "VBSettings: 'svgweight' must be 'cc', 'lowdin', or 'both'"
+            )
 
         # acitve_order的动态默认值：如果有aoa，则默认按照aoa顺序，否则设为rumer
         if self.active_order == "default":
@@ -462,6 +469,7 @@ class autoVBMain:
         xmo_file: Path,
         projection: str,
         hide_svg_labels: bool = False,
+        weight_table: str = "both",
     ):
         """调用 xmo2svg，按指定三维或二维排布方式生成 SVG。"""
         from .cli.xmo2svg import xmo2svg_file
@@ -469,6 +477,7 @@ class autoVBMain:
         return xmo2svg_file(
             xmo_file,
             projection=projection,
+            weight_table=weight_table,
             show_atom_labels=not hide_svg_labels,
             show_connection_labels=not hide_svg_labels,
         )
@@ -627,6 +636,7 @@ class autoVBMain:
                 xmo_path,
                 self.input_data.vbsettings.xmo2svg,
                 self.input_data.vbsettings.hide_svg_labels,
+                self.input_data.vbsettings.svgweight,
             )
 
         if not self.input_data.vbsettings.nojson and hasattr(self, 'parsed_data'):

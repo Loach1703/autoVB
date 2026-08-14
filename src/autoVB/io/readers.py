@@ -98,7 +98,7 @@ class autoVBInputParser:
 
         settings = VBSettings()
         type_hints = get_type_hints(VBSettings)
-        alias_map = {"int": "inte", "str": "stru"}
+        alias_map = {"int": "inte", "str": "stru", "aat": "aoa"}
         passthrough = XMIPassthrough()
 
         # 默认方法
@@ -317,7 +317,7 @@ class autoVBInputParser:
         pair_list: list[str] = [p.strip() for p in re.findall(pattern, inner) if p.strip()]
         settings = VBSettings()
         type_hints = get_type_hints(VBSettings)
-        alias_map = {"int": "inte", "str": "stru"}
+        alias_map = {"int": "inte", "str": "stru", "aat": "aoa"}
 
         for pair in pair_list:
             if "=" not in pair:

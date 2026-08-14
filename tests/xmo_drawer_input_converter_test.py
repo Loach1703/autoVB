@@ -1,3 +1,5 @@
+import re
+
 from rdkit import Chem
 
 from autoVB.draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
@@ -184,6 +186,54 @@ $end
     assert drawer_input.active_space[0].legend == "CC 1 w=1.00000"
 
 
+def test_converter_can_show_cc_and_lowdin_weights(tmp_path):
+    xmo_path = write_xmo(
+        tmp_path,
+        """
+$ctrl
+vbscf
+nae=2
+nao=2
+basis=6-31g
+$end
+
+$orb
+1*2
+1
+2
+$end
+
+$geo
+C 0.0 0.0 0.0
+C 1.0 0.0 0.0
+$end
+
+******  WEIGHTS OF STRUCTURES ******
+1 0.90 ****** 1-2
+2 0.10 ****** 1 1
+
+Lowdin Weights
+1 0.20 ****** 1-2
+2 0.80 ****** 1 1
+""",
+    )
+
+    parsed = XmoParser(xmo_path).parse()
+    drawer_input = XmoToDrawerInputConverter(
+        parsed,
+        tmp_path,
+        hide_hydrogens=False,
+        max_structures=1,
+        weight_table="both",
+        show_connection_labels=False,
+    ).convert()
+
+    assert drawer_input.weight_table == "both"
+    assert drawer_input.active_space[0].legend == (
+        "CC 2 w=0.10000\nLowdin 2 w=0.80000"
+    )
+
+
 def test_drawer_renders_unpaired_electron_as_radical_dot(tmp_path):
     drawer = MoleculeBondVariantDrawer(
         xyz_file=tmp_path / "dummy.xyz",
@@ -204,6 +254,84 @@ def test_drawer_renders_unpaired_electron_as_radical_dot(tmp_path):
 
     assert "radical-dot" in svg
     assert "fill='#E00000'" in svg
+
+
+def test_charge_label_avoids_svg_atom_bbox_at_right_edge(tmp_path):
+    drawer = MoleculeBondVariantDrawer(
+        xyz_file=tmp_path / "dummy.xyz",
+        output_dir=tmp_path,
+        active_bond_atom=[],
+        active_space=[],
+    )
+    svg = (
+        "<svg>"
+        "<path class='atom-0' "
+        "d='M 80 35 L 98 35 L 98 65 L 80 65 Z'/>"
+        "<path class='atom-1' "
+        "d='M 10 35 L 25 35 L 25 65 L 10 65 Z'/>"
+        "</svg>"
+    )
+
+    annotated = drawer._add_svg_annotations(
+        svg,
+        atom_coords=[(90.0, 50.0), (17.5, 50.0)],
+        charge_notes={0: "+"},
+        lone_pair_counts={},
+        radical_counts={},
+        width=100,
+        height=100,
+    )
+
+    charge_match = re.search(
+        r"class='charge-label atom-0' x='([\d.]+)' y='([\d.]+)'",
+        annotated,
+    )
+    assert charge_match is not None
+    charge_position = (float(charge_match.group(1)), float(charge_match.group(2)))
+    charge_bbox = drawer._text_bbox(
+        charge_position,
+        26.4 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        26.4,
+    )
+    assert not drawer._bbox_collides(charge_bbox, [(80.0, 35.0, 98.0, 65.0)])
+
+
+def test_charge_label_avoids_svg_bond_bbox(tmp_path):
+    drawer = MoleculeBondVariantDrawer(
+        xyz_file=tmp_path / "dummy.xyz",
+        output_dir=tmp_path,
+        active_bond_atom=[],
+        active_space=[],
+    )
+    svg = (
+        "<svg>"
+        "<path class='bond-0 atom-0 atom-1' d='M 10,50 L 90,50' "
+        "style='stroke:#E00000;stroke-width:3.0px'/>"
+        "</svg>"
+    )
+
+    annotated = drawer._add_svg_annotations(
+        svg,
+        atom_coords=[(50.0, 50.0)],
+        charge_notes={0: "2-"},
+        lone_pair_counts={},
+        radical_counts={},
+        width=100,
+        height=100,
+    )
+
+    charge_match = re.search(
+        r"class='charge-label atom-0' x='([\d.]+)' y='([\d.]+)'",
+        annotated,
+    )
+    assert charge_match is not None
+    charge_position = (float(charge_match.group(1)), float(charge_match.group(2)))
+    charge_bbox = drawer._text_bbox(
+        charge_position,
+        2 * 26.4 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        26.4,
+    )
+    assert not drawer._bbox_collides(charge_bbox, drawer._svg_bond_bboxes(svg))
 
 
 def test_unpaired_electron_movement_does_not_create_charge_notes(tmp_path):
@@ -324,8 +452,34 @@ def test_legend_font_size_prefers_large_text_and_shrinks_long_legends() -> None:
         520,
         390,
     )
+    multiline_size = MoleculeBondVariantDrawer._legend_font_size(
+        "CC 2 w=0.10961\nLowdin 2 w=0.07160",
+        520,
+        390,
+    )
 
     assert short_size == 40
     assert large_size == 47
-    assert r24_size == 30
+    assert r24_size == 33
+    assert multiline_size == 40
     assert 16 <= long_size < short_size
+
+
+def test_multiline_legend_spacing_moves_only_second_line() -> None:
+    svg = (
+        "<svg>"
+        "<path class='legend' d='M 1 1'/><path class='legend' d='M 2 2'/>"
+        "<path class='legend' d='M 3 3'/><path class='legend' d='M 4 4'/>"
+        "</svg>"
+    )
+
+    adjusted = MoleculeBondVariantDrawer._increase_multiline_legend_spacing(
+        svg,
+        "AB\nCD",
+        520,
+        390,
+    )
+
+    assert adjusted.count("transform='translate(0,6.0)'") == 2
+    assert "<path class='legend' d='M 1 1'/>" in adjusted
+    assert "<path class='legend' d='M 2 2'/>" in adjusted
