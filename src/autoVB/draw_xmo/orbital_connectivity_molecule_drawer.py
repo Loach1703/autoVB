@@ -90,11 +90,6 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
             atom.SetIntProp(self.ORIGINAL_ATOM_NUMBER_PROP, atom.GetIdx() + 1)
 
         orbital_bonds = self._orbital_bonds()
-        if not orbital_bonds:
-            raise ValueError(
-                f"Cannot build connectivity for {self.xyz_file.name}: "
-                "$orb contains no two-atom labels."
-            )
 
         editable_mol = Chem.RWMol(raw_mol)
         for begin_atom, end_atom in orbital_bonds:
