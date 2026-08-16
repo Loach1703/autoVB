@@ -783,10 +783,15 @@ class GaussianNBOParser:
         '''
         使用 pyssian 解析 NBO 输出文件。
         '''
-        with GaussianOutFile(self.nbo_output_path) as GOF:
-            GOF.read()
-        self.gaussian_out_data = GOF
-        return GOF
+        try:
+            with GaussianOutFile(self.nbo_output_path) as GOF:
+                GOF.read()
+            self.gaussian_out_data = GOF
+            return GOF
+        except:
+            logger.warning(f"Failed to parse NBO output file {self.nbo_output_path} using pyssian.")
+            self.gaussian_out_data = None
+            return None
 
     def build_bond_antibond_pairs(self) -> List[NBOBondAntibondPair]:
         """

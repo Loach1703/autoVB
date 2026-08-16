@@ -614,17 +614,12 @@ class autoVBMain:
 
         log_subroutine("Entry XMVB BOVB Calculation")
         self.timed_call("run_xmvb_bovb", self.run_xmvb, self.bovb_name)
-        bovb_data = self.timed_call(
-            "parser_xmo_bovb", self.parser_xmo, bovb_xmo, "bovb"
+        # TODO: BOVB 的 breathing-orbital 编号会改变并跨行输出结构，
+        # 等 XmoParser 支持该映射后再恢复 BOVB 的能量、权重和 JSON 解析。
+        logger.warning(
+            f"Skipping BOVB output parsing for {bovb_xmo}; "
+            "the XMVB output file is kept for manual inspection."
         )
-        if not self.input_data.vbsettings.nojson:
-            self.timed_call(
-                "write_bovb_json_summary",
-                write_json_summary,
-                self.input_data,
-                bovb_data,
-                Path(f"{self.bovb_name}.json"),
-            )
         return bovb_xmo
 
     def timed_call(self, step_name: str, func, *args, **kwargs):
@@ -665,6 +660,7 @@ class autoVBMain:
             self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
 
         self.wxp = self.read_nbo()
+        is_bovb = self.input_data.method.lower() == 'bovb'
         bovb_stream = self._use_bovb_stream()
         if bovb_stream:
             xmo_path = Path(f"{self.bovb_name}.xmo")
@@ -691,10 +687,19 @@ class autoVBMain:
                 xmo_path = self.run_bovb_stream()
             else:
                 self.timed_call("run_xmvb", self.run_xmvb)
-                self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
+                if is_bovb:
+                    # TODO: 恢复支持 breathing-orbital 映射后的 BOVB 输出解析。
+                    logger.warning(
+                        f"Skipping BOVB output parsing for {xmo_path}; "
+                        "the XMVB output file is kept for manual inspection."
+                    )
+                else:
+                    self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
 
         # draw_xmo 调用
-        if self.input_data.vbsettings.draw_xmo:
+        if self.input_data.vbsettings.draw_xmo and is_bovb:
+            logger.warning("Skipping draw_xmo because BOVB output parsing is not supported yet.")
+        elif self.input_data.vbsettings.draw_xmo:
             log_subroutine("Entry draw_xmo")
             # novb模式下没有生成xmo文件，因此需要先解析xmo文件，如果没有解析到数据则跳过绘制步骤
             if not hasattr(self, 'parsed_data'):
@@ -705,7 +710,9 @@ class autoVBMain:
                     logger.warning("If you want to draw the .xmo, you can use command line tool 'draw_xmo' with the generated .xmo file after running XMVB.")
             self.timed_call("draw_xmo", self.draw_xmo, self.parsed_data, 'cc')
 
-        if self.input_data.vbsettings.xmo2svg is not None:
+        if self.input_data.vbsettings.xmo2svg is not None and is_bovb:
+            logger.warning("Skipping xmo2svg because BOVB output parsing is not supported yet.")
+        elif self.input_data.vbsettings.xmo2svg is not None:
             log_subroutine("Entry xmo2svg")
             self.timed_call(
                 "xmo2svg",
@@ -719,7 +726,7 @@ class autoVBMain:
         if (
             not self.input_data.vbsettings.nojson
             and hasattr(self, 'parsed_data')
-            and not bovb_stream
+            and not is_bovb
         ):
             from .io.writers import write_json_summary
             self.timed_call("write_json_summary", write_json_summary, self.input_data, self.parsed_data)

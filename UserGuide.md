@@ -183,7 +183,7 @@ opt参数，暂未实现
 不进行 GVB 计算，读取 MOKIT 的计算输出。
 
 ##### 2.3.3.9 bovb_stream
-仅在使用 BOVB 方法时生效。开启后先以 `xxx_vb` 为文件名进行 VBSCF 计算，再使用 VBSCF 生成的 `.orb` 轨道初猜生成 `xxx_bovb.xmi` 并进行 BOVB 计算。两步计算分别解析能量，并输出 `xxx_vb.json` 和 `xxx_bovb.json`。当同时设置 `novb` 时，该参数会被忽略。
+仅在使用 BOVB 方法时生效。开启后先以 `xxx_vb` 为文件名进行 VBSCF 计算，再使用 VBSCF 生成的 `.orb` 轨道初猜生成 `xxx_bovb.xmi` 并进行 BOVB 计算。当前仅解析第一阶段 VBSCF 并输出 `xxx_vb.json`；BOVB 的 `.xmo` 文件会正常保留，但暂不解析或生成 JSON 和 SVG。当同时设置 `novb` 时，该参数会被忽略。
 
 #### 2.3.4 绘图相关
 
