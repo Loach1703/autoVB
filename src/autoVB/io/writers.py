@@ -56,9 +56,22 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
         extra_lines = []
         extra_keys = set()
 
+    def is_nstr() -> bool:
+        if xmi_passthrough and xmi_passthrough.str_section_text is not None:
+            return True
+        return False
+
+    # 如果用户提供了$str
+    if is_nstr():
+        str_body = xmi_passthrough.str_section_text
+        length = len(str_body.splitlines())
+        str_line= f"nstr={length}"
+    else:
+        str_line = f"str={xmidata.stru_type}"
+
     ctrl_lines = [
         f"{xmidata.method}",
-        f"str={xmidata.stru_type}",
+        f"{str_line}",
         f"nao={xmidata.nao}",
         f"nae={xmidata.nae}",
         f"ncharge={xmidata.ncharge}",
@@ -101,16 +114,15 @@ $end
 '''
 
     # 如果用户提供了$str
-    if xmi_passthrough and xmi_passthrough.str_section_text is not None:
-        str_body = xmi_passthrough.str_section_text
-        xmi_text += f'''
+    if is_nstr():
+        str_body = f'''
 $str
-{str_body}
+{xmi_passthrough.str_section_text}
 $end
 '''
+        xmi_text += str_body
 
     xmi_text += f'''
-
 $gus
 {xmidata.init_guess_section}
 $end
