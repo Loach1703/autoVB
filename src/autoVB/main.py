@@ -66,7 +66,6 @@ class VBSettings:
     guess: str = "nbo"
     active_order: str = "default"
     nbo_file: Path = None
-    draw_xmo: bool = False
     xmo2svg: Optional[str] = None
     svgweight: str = "both"
     svgbaseline: int = 0
@@ -117,9 +116,10 @@ class VBSettings:
                 )
 
         self.svgweight = self.svgweight.strip().lower()
-        if self.svgweight not in ("cc", "lowdin", "both"):
+        if self.svgweight not in ("cc", "lowdin", "inverse", "renormalized", "both"):
             raise ValueError(
-                "VBSettings: 'svgweight' must be 'cc', 'lowdin', or 'both'"
+                "VBSettings: 'svgweight' must be 'cc', 'lowdin', 'inverse', "
+                "'renormalized', or 'both'"
             )
 
         if self.svgbaseline < 0:
@@ -426,65 +426,6 @@ class autoVBMain:
         gvb_stem = Path(line.split()[1]).stem
         return Path(f"{gvb_stem}_s.fch")
 
-    def draw_xmo(self, parsed_data: 'XmoParsedData', weight_table: str = 'cc', max_str: int = 20):
-        '''
-        使用XMVB的输出文件（.xmo）来绘制价键结构，核心步骤包括：
-        1. 解析.xmo文件，提取分子结构、活性空间信息、以及每个价键结构的权重。
-        2. 根据提取的信息，使用MoleculeBondVariantDrawer类来绘制
-        3. 将绘制的结果保存到当前目录，并记录输出文件的信息。
-        Args:
-            parsed_data ('XmoParsedData'): 从.xmo文件解析得到的数据对象，包含分子结构、活性空间信息、以及每个价键结构的权重等。
-            weight_table (str): 权重表的选择，默认为'cc'，可以是 'lowdin', 'inverse', 'renormalized'等。
-            max_str (int): 最大绘制的价键结构数量，默认为20。
-        Returns:
-            None
-        '''
-        from .draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
-        from .draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
-
-        WEIGHT = weight_table
-        MAX_STR = max_str
-        output_dir = Path.cwd()
-        hide_hydrogens = True
-
-        converter = XmoToDrawerInputConverter(
-            parsed_data,
-            output_dir,
-            hide_hydrogens=hide_hydrogens,
-            max_structures=MAX_STR,
-            weight_table=WEIGHT,
-        )
-        drawer_input = converter.convert()
-        hide_hydrogens = converter.hide_hydrogens
-
-        drawer = MoleculeBondVariantDrawer(
-            xyz_file=drawer_input.xyz_file,
-            output_dir=output_dir,
-            charge=int(parsed_data.ctrl_options.get("ncharge", self.input_data.charge)),
-            active_bond_atom=drawer_input.active_bond_atom,
-            active_space=drawer_input.active_space,
-            baseline_unpaired_atoms=drawer_input.baseline_unpaired_atoms,
-            active_space_color="#B00000",
-            active_space_width=3.0,
-            color_active_space=True,
-            show_atom_labels=True,
-            hide_hydrogens=hide_hydrogens,
-            show_lone_pairs=True,
-            write_individual_svgs=False,
-        )
-        result = drawer.draw()
-
-        logger.info(f"Read XMO from: {parsed_data.source_file.resolve()}")
-        logger.info(f"Generated XYZ: {drawer_input.xyz_file.resolve()}")
-        logger.info(f"Active orbital -> atom: {drawer_input.orbital_to_atom}")
-        logger.info(f"Weight table: {drawer_input.weight_table}")
-        logger.info(f"active_bond_atom: {drawer_input.active_bond_atom}")
-        logger.info(f"Bond perception mode: {drawer.bond_perception_mode}")
-        logger.info(f"Drawn structures: {len(drawer_input.active_space)}")
-        logger.info(f"Output directory: {result.output_dir.resolve()}")
-        for out_file in result.written_files:
-            logger.info(f" - {out_file.name}")
-
     def draw_xmo2svg(
         self,
         xmo_file: Path,
@@ -495,8 +436,9 @@ class autoVBMain:
     ):
         """调用 xmo2svg，按指定三维或二维排布方式生成 SVG。"""
         from .cli.xmo2svg import xmo2svg_file
+        from .vbkit.xmo2svg import xmo2svg_report_lines
 
-        return xmo2svg_file(
+        result = xmo2svg_file(
             xmo_file,
             projection=projection,
             weight_table=weight_table,
@@ -504,6 +446,10 @@ class autoVBMain:
             show_atom_labels=not hide_svg_labels,
             show_connection_labels=not hide_svg_labels,
         )
+        if result is not None:
+            for line in xmo2svg_report_lines(result):
+                logger.info(line)
+        return result
 
     def parser_xmo(self, xmo_file: Path, method: str | None = None) -> 'XmoParsedData':
         '''
@@ -701,20 +647,6 @@ class autoVBMain:
                     )
                 else:
                     self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
-
-        # draw_xmo 调用
-        if self.input_data.vbsettings.draw_xmo and is_bovb:
-            logger.warning("Skipping draw_xmo because BOVB output parsing is not supported yet.")
-        elif self.input_data.vbsettings.draw_xmo:
-            log_subroutine("Entry draw_xmo")
-            # novb模式下没有生成xmo文件，因此需要先解析xmo文件，如果没有解析到数据则跳过绘制步骤
-            if not hasattr(self, 'parsed_data'):
-                try:
-                    self.timed_call("parser_xmo", self.parser_xmo, xmo_path)
-                except Exception as e:
-                    logger.warning("No parsed .xmo data available for drawing. Skipping draw_xmo step.")
-                    logger.warning("If you want to draw the .xmo, you can use command line tool 'draw_xmo' with the generated .xmo file after running XMVB.")
-            self.timed_call("draw_xmo", self.draw_xmo, self.parsed_data, 'cc')
 
         if self.input_data.vbsettings.xmo2svg is not None and is_bovb:
             logger.warning("Skipping xmo2svg because BOVB output parsing is not supported yet.")

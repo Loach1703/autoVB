@@ -18,7 +18,8 @@ class XmoDrawerInput:
         baseline_unpaired_atoms: 基准价键结构中的未成对电子原子。
         active_space: 需要绘制的价键结构列表。
         orbital_to_atom: XMVb 活性轨道编号到绘图原子编号的映射。
-        weight_table: 当前使用的权重表，取值为 `"cc"`、`"lowdin"` 或 `"both"`。
+        weight_table: 当前使用的权重表，取值为 `"cc"`、`"lowdin"`、
+            `"inverse"`、`"renormalized"` 或 `"both"`。
     """
 
     xyz_file: Path
@@ -54,9 +55,8 @@ class XmoToDrawerInputConverter:
             max_structures: 最多转换多少个 CC 结构；`None` 表示转换全部。
             baseline_index: 作为初始电子排布基准的权重序号；`None` 表示使用
                 当前权重表中权重最大的结构。
-            weight_table: 使用哪一种权重表，`"cc"` 表示 `WEIGHTS OF STRUCTURES`，
-                `"lowdin"` 表示 `Lowdin Weights`，`"both"` 同时显示两者并按
-                Lowdin 权重选择结构。
+            weight_table: 使用哪一种权重表。`"both"` 同时显示 CC 和 Lowdin，
+                并按 Lowdin 权重选择结构。
             show_connection_labels: 是否在图例中显示成键原子对和自由基位置。
         """
         self.parsed_data = parsed_data
@@ -221,9 +221,9 @@ class XmoToDrawerInputConverter:
         Returns:
             CC 权重或 Lowdin 权重列表；`both` 模式返回 Lowdin 权重列表。
         """
-        if self.weight_table in {"lowdin", "both"}:
+        if self.weight_table == "both":
             return self.parsed_data.lowdin_weights
-        return self.parsed_data.cc_weights
+        return getattr(self.parsed_data, f"{self.weight_table}_weights")
 
     @staticmethod
     def _normalize_weight_table(weight_table: str) -> str:
@@ -236,13 +236,13 @@ class XmoToDrawerInputConverter:
             标准化后的权重表名称。
 
         Raises:
-            ValueError: 权重表名称不是 `"cc"`、`"lowdin"` 或 `"both"`。
+            ValueError: 权重表名称不受支持。
         """
         normalized_name = weight_table.strip().lower()
-        if normalized_name in {"cc", "lowdin", "both"}:
+        if normalized_name in {"cc", "lowdin", "inverse", "renormalized", "both"}:
             return normalized_name
         raise ValueError(
-            "weight_table must be 'cc', 'lowdin', or 'both', "
+            "weight_table must be 'cc', 'lowdin', 'inverse', 'renormalized', or 'both', "
             f"but got {weight_table!r}."
         )
 
@@ -394,7 +394,12 @@ class XmoToDrawerInputConverter:
                 f"Lowdin {weight.index} w={weight.weight:.5f}"
             )
         else:
-            table_label = "Lowdin" if self.weight_table == "lowdin" else "CC"
+            table_label = {
+                "cc": "CC",
+                "lowdin": "Lowdin",
+                "inverse": "Inverse",
+                "renormalized": "Renormalized",
+            }[self.weight_table]
             legend = f"{table_label} {weight.index} w={weight.weight:.5f}"
         if not self.show_connection_labels:
             return legend

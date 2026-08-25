@@ -21,7 +21,7 @@ def autovb_nbo_impl(xyz: Path, basis: str, charge: int, spin: int) -> int:
 
 
 def autovb_nbo(argv=None):
-    parser = argparse.ArgumentParser(prog="autovb-nbo", description="Generate Gaussian NBO .gjf from .xyz")
+    parser = argparse.ArgumentParser(prog="xyz2nbo", description="Generate Gaussian NBO .gjf from .xyz")
     parser.add_argument("xyz", type=Path, help="input .xyz file")
     parser.add_argument("basis", help="basis set for gjf")
     parser.add_argument("-c", "--charge", type=int, default=0)

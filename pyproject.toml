@@ -17,12 +17,13 @@ dependencies = [
 ]
 
 [project.scripts]
-autovb_nbo = "autoVB.cli.nbo:autovb_nbo"
-autovb_xmi = "autoVB.cli.xmi:autovb_xmi"
+xyz2nbo = "autoVB.cli.nbo:autovb_nbo"
+nbo2xmi = "autoVB.cli.xmi:autovb_xmi"
 autovb = "autoVB.cli.autovb:autovb_main"
 autovb_test = "autoVB.cli.autovb_test:autovb_test"
-draw_xmo = "autoVB.cli.draw_xmo:draw_xmo"
+draw_xmo = "autoVB.cli.xmo2svg:xmo2svg"
 fch2vb = "autoVB.cli.fch2vb:fch2vb"
+fch2xmi = "autoVB.cli.fch2vb:fch2vb"
 xmo2json = "autoVB.cli.xmo2json:xmo2json"
 xmo2xmi = "autoVB.cli.xmo2xmi:xmo2xmi"
 xmo2svg = "autoVB.cli.xmo2svg:xmo2svg"

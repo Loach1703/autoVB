@@ -188,10 +188,10 @@ opt参数，暂未实现
 #### 2.3.4 绘图相关
 
 ##### 2.3.4.1 draw_xmo
-调用 `draw_xmo` 工具，对 `.xmo` 文件进行解析，生成分子价键结构 `.svg` 图像文件。画出的分子构型仅供参考，可能存在错误。
+`draw_xmo` 是 `xmo2svg` 的别名。必须指定与 `xmo2svg` 相同的投影值，例如 `autovb{draw_xmo=optimized3d}` 等价于 `autovb{xmo2svg=optimized3d}`。画出的分子构型仅供参考，可能存在错误。
 
 ##### 2.3.4.2 xmo2svg
-在 XMVB 计算结束后解析 `.xmo` 文件，并生成与 `.xmo` 文件同名的价键结构 `.svg` 图像。使用格式为 `autovb{xmo2svg=投影方式}`。支持以下选项：
+在 XMVB 计算结束后解析 `.xmo` 文件，并生成与 `.xmo` 文件同名的价键结构 `.svg` 图像。使用格式为 `autovb{xmo2svg=投影方式}`。`xmo2svg` 是统一的绘图参数，支持以下选项：
 
 **不设置（默认值为 `None`）**：不生成 `.svg` 图像。
 
@@ -211,7 +211,7 @@ autovb{xmo2svg=rdkit,hide_svg_labels}
 ```
 
 ##### 2.3.4.4 svgweight
-选择 `xmo2svg` 图中显示的结构权重，可设为 `cc`、`lowdin` 或 `both`，默认值为 `both`。当设置为 `both` 时，CC 权重和 Lowdin 权重分两行显示，结构仍按 Lowdin 权重选择和排序。例如：
+选择 `xmo2svg` 图中显示和排序的结构权重，可设为 `cc`、`lowdin`、`inverse`、`renormalized` 或 `both`，默认值为 `both`。当设置为 `both` 时，CC 权重和 Lowdin 权重分两行显示，结构仍按 Lowdin 权重选择和排序。例如：
 
 ```text
 autovb{xmo2svg=optimized3d,svgweight=both}
@@ -276,12 +276,12 @@ autovb <input-file> --mem 8GB --nproc 8
 sbatch example_slurm.sh <input-file>
 ```
 
-### 3.2 `autovb_nbo`
+### 3.2 `xyz2nbo`
 
-`autovb_nbo` 根据 XYZ 坐标文件生成 Gaussian NBO 输入文件。它只负责生成 `.gjf`，不会自动运行 Gaussian 或 NBO；生成后应检查电荷、自旋和计算设置。
+`xyz2nbo` 根据 XYZ 坐标文件生成 Gaussian NBO 输入文件。它只负责生成 `.gjf`，不会自动运行 Gaussian 或 NBO；生成后应检查电荷、自旋和计算设置。
 
 ```bash
-autovb_nbo <xyz-file> <basis> [-c CHARGE] [-s SPIN | -m MULTIPLICITY]
+xyz2nbo <xyz-file> <basis> [-c CHARGE] [-s SPIN | -m MULTIPLICITY]
 ```
 
 参数：
@@ -295,16 +295,16 @@ autovb_nbo <xyz-file> <basis> [-c CHARGE] [-s SPIN | -m MULTIPLICITY]
 输出文件名为与 XYZ 同名的 `.gjf` 文件。例如：
 
 ```bash
-autovb_nbo C6H6.xyz 6-31g*
-autovb_nbo radical.xyz 6-31g* --charge 0 --multiplicity 2
+xyz2nbo C6H6.xyz 6-31g*
+xyz2nbo radical.xyz 6-31g* --charge 0 --multiplicity 2
 ```
 
-### 3.3 `autovb_xmi`
+### 3.3 `nbo2xmi`
 
-`autovb_xmi` 从已有的 Gaussian `.fch`、`.chk` 文件或不带后缀的文件名生成 XMVB `.xmi` 输入文件。它会使用 NBO 结果选择活性空间，并生成 NBO 轨道初猜。
+`nbo2xmi` 从已有的 Gaussian `.fch`、`.chk` 文件或不带后缀的文件名生成 XMVB `.xmi` 输入文件。它会使用 NBO 结果选择活性空间，并生成 NBO 轨道初猜。
 
 ```bash
-autovb_xmi <fch-or-chk> <basis> [options]
+nbo2xmi <fch-or-chk> <basis> [options]
 ```
 
 参数：
@@ -319,50 +319,25 @@ autovb_xmi <fch-or-chk> <basis> [options]
 例如：
 
 ```bash
-autovb_xmi C6H6.fch 6-31g*
-autovb_xmi C6H6.fch 6-31g* -nae 6 -nao 6
-autovb_xmi C6H6.fch 6-31g* -aoa 1 3 5 7 9 11
+nbo2xmi C6H6.fch 6-31g*
+nbo2xmi C6H6.fch 6-31g* -nae 6 -nao 6
+nbo2xmi C6H6.fch 6-31g* -aoa 1 3 5 7 9 11
 ```
 
 默认输出与输入同名的 `.xmi` 文件。
 
-### 3.4 `draw_xmo`
+### 3.4 `xmo2svg`
 
-`draw_xmo` 读取 XMVB 的 `.xmo` 文件，解析价键结构并生成 SVG 图像。它适合直接查看 XMVB 输出中的价键结构。
+`xmo2svg` 读取 XMVB 的 `.xmo` 文件并生成 SVG 图像。通过 `--connectivity` 选择分子连接关系：默认使用 `.xmo` 中 `$orb` 部分的原子标签，适合过渡态、多个分子片段或需要保留 `$orb` 成键关系的体系；设置为 `rdkit` 时使用 RDKit 推断普通分子键连关系。
 
 ```bash
-draw_xmo <xmo-file> [options]
+xmo2svg <xmo-file> [--connectivity {orb,rdkit}] [options]
 ```
 
 参数：
 
-- `-w`、`--weight {lowdin,cc}`：选择用于排序和绘图的权重表，默认值为 `lowdin`。
-- `-m`、`--max-structures {N,all}`：最多绘制的结构数，默认值为 `20`；使用 `all` 绘制全部结构。
-- `--baseline-index N`：指定用于确定初始电子分布的结构编号，默认使用最高权重结构。
-- `--charge CHARGE`：RDKit 判断键级时使用的总电荷，默认值为 `0`。
-- `--show-hydrogens`：显示氢原子；默认隐藏氢原子。
-- `--write-individual-svgs`：除网格图外，为每个价键结构单独写出 SVG。
-- `-n`、`--structures-per-row N`：网格图每行的结构数，默认值为 `2`。
-- `--hide-atom-labels`：隐藏原子编号。
-- `--hide-lone-pairs`：隐藏孤对电子标记。
-
-例如：
-
-```bash
-draw_xmo C6H6_vb.xmo --max-structures 5 --show-hydrogens
-```
-
-### 3.5 `xmo2svg`
-
-`xmo2svg` 也是将 `.xmo` 转换为 SVG 的工具，但它使用 `.xmo` 中 `$orb` 部分的原子标签建立分子连接关系。对于过渡态、多个分子片段或需要保留 `$orb` 成键关系的体系，通常优先使用该工具。
-
-```bash
-xmo2svg <xmo-file> [options]
-```
-
-参数：
-
-- `-w`、`--weight {lowdin,cc,both}`：选择显示的权重，默认值为 `lowdin`；`both` 同时显示 CC 和 Lowdin 权重。
+- `--connectivity {orb,rdkit}`：选择连接关系来源，默认值为 `orb`。`orb` 使用 `$orb` 标签，`rdkit` 使用 RDKit 键连推断。
+- `-w`、`--weight {lowdin,cc,inverse,renormalized,both}`：选择显示和排序的权重，默认值为 `lowdin`；`both` 同时显示 CC 和 Lowdin 权重。
 - `-m`、`--max-structures {N,all}`：最多绘制的结构数，默认值为 `20`；使用 `all` 绘制全部结构。
 - `--baseline-index N`：指定基准结构编号，默认使用最高权重结构。
 - `--charge CHARGE`：RDKit 判断键级时使用的总电荷，默认值为 `0`。
@@ -378,18 +353,28 @@ xmo2svg <xmo-file> [options]
 例如：
 
 ```bash
+xmo2svg C6H6_vb.xmo --connectivity rdkit
 xmo2svg R24_vb.xmo --projection optimized3d --weight both
 xmo2svg mens_vb.xmo --projection contact --hide-connection-labels
 ```
 
 输出 SVG 文件与 `.xmo` 文件同名，扩展名为 `.svg`；使用 `--write-individual-svgs` 时还会输出各结构对应的单独 SVG 文件。
 
-### 3.6 `fch2vb`
+`draw_xmo` 是 `xmo2svg` 的别名，所有参数、默认值、连接模式和输出文件名均完全一致：
+
+```bash
+draw_xmo <xmo-file> [options]
+```
+
+### 3.5 `fch2vb`
 
 `fch2vb` 调用 MOKIT 的 `fch2inp` 将 Gaussian `.fch` 转换为 GAMESS `.inp`，读取其中的轨道信息，并生成只包含初猜轨道和分子坐标的最小 XMVB `.xmi` 文件。该工具不进行活性空间选择，生成的活性电子数和活性轨道数均为 `0`，轨道类型为 `oeo`。
 
+`fch2xmi` 是 `fch2vb` 的同功能别名。
+
 ```bash
 fch2vb <fch-file> [-o OUTPUT] [--basis BASIS] [--norb N]
+fch2xmi <fch-file> [-o OUTPUT] [--basis BASIS] [--norb N]
 ```
 
 参数：
@@ -405,7 +390,7 @@ fch2vb <fch-file> [-o OUTPUT] [--basis BASIS] [--norb N]
 fch2vb C4H6.fch --basis cc-pVDZ --norb 15 -o C4H6_guess.xmi
 ```
 
-### 3.7 `xmo2json`
+### 3.6 `xmo2json`
 
 `xmo2json` 读取 XMVB `.xmo` 文件并生成 JSON 摘要。摘要包含分子信息、`orb` 部分、能量、收敛状态、价键结构和结构权重等结果，便于后续批量统计和数据集处理。
 
@@ -425,7 +410,7 @@ xmo2json C6H6_vb.xmo
 xmo2json C6H6_vb.xmo -o results/C6H6.json
 ```
 
-### 3.8 `xmo2xmi`
+### 3.7 `xmo2xmi`
 
 `xmo2xmi` 读取 `.xmi` 文件，并用同目录下与其同名的 `.orb` 文件替换 XMVB 初猜轨道；其余输入内容保持不变。该工具适用于用一次 XMVB 计算生成的 `.orb` 作为下一次计算初猜的情况。
 
@@ -447,14 +432,13 @@ xmo2xmi C6H6_vb.xmi
 xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
 ```
 
-### 3.10 命令选择建议
+### 3.8 命令选择建议
 
 - 从分子坐标开始进行完整自动计算：使用 `autovb`。
-- 只生成 Gaussian NBO 输入文件：使用 `autovb_nbo`。
-- 已有 `.fch`/`.chk`，只想生成 XMVB `.xmi`：使用 `autovb_xmi`。
+- 只生成 Gaussian NBO 输入文件：使用 `xyz2nbo`。
+- 已有 `.fch`/`.chk`，只想生成 XMVB `.xmi`：使用 `nbo2xmi`。
 - 已有 `.fch`，只想转换为最小 XMVB 初猜：使用 `fch2vb`。
-- 已有 `.xmo`，需要按普通分子结构绘图：使用 `draw_xmo`。
-- 已有 `.xmo`，需要按 `$orb` 标签或三维投影绘图：使用 `xmo2svg`。
+- 已有 `.xmo`，需要绘图：使用 `xmo2svg`。
 - 已有 `.xmo`，需要批量提取结果：使用 `xmo2json`。
 - 需要用 `.orb` 替换 `.xmi` 初猜：使用 `xmo2xmi`。
 
