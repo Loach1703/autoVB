@@ -1254,7 +1254,7 @@ class XMVBNBO:
         # 生成XMIData对象
         from ..io.writers import XMIData
         xmidata = XMIData(
-            molecule_name=self.filename,
+            molecule_name=self.origin_filename,
             method=method,
             stru_type=stru_type,
             int_type=vbsetting.inte,

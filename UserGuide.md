@@ -232,19 +232,231 @@ autovb{xmo2svg=optimized3d,svgbaseline=2}
 ##### 2.3.5.1 debug
 调试模式，会打印更多输出。
 
-### 3 脚本提交方法
-配置好环境变量后，你可以直接在终端中传入输入文件运行：
+## 3 命令行工具
+
+安装 `autoVB` 后，以下命令行工具会通过 Python 包的脚本入口提供。可以在终端中使用 `<命令> --help` 查看对应的帮助信息。除特别说明外，命令都应在包含输入文件的工作目录中运行。
+
+### 3.1 `autovb`
+
+`autovb` 是主程序入口，用于从 `.autovb`、Gaussian `.gjf` 或 XMVB `.xmi` 输入文件开始完整的 autoVB 工作流。它可以执行 NBO/GVB 初猜准备、活性空间选择、XMVB 输入文件生成、XMVB 计算、结果解析和绘图等步骤。
+
+```bash
+autovb <input-file> [--mem MEM] [--nproc NPROC]
+```
+
+参数：
+
+- `<input-file>`：输入文件路径。
+- `--mem MEM`：覆盖输入文件中的内存设置，例如 `4GB`、`8G` 或 `4000MB`。
+- `--nproc NPROC`：覆盖输入文件中的并行进程数。
+
+例如：
+
+```bash
+autovb C6H6.autovb --mem 8GB --nproc 8
+```
+
+#### 3.1.1 作业提交
+
+配置好环境变量后，可以直接在终端中运行：
+
 ```bash
 autovb <input-file>
 ```
-如果需要同时指定内存和并行核心数（覆盖文件内 `%mem` 与 `%nprocshared`），可以追加参数：
+
+也可以通过 `--mem` 和 `--nproc` 覆盖输入文件中的 `%mem` 与 `%nprocshared`：
+
 ```bash
 autovb <input-file> --mem 8GB --nproc 8
 ```
-注意：不要在登录节点运行计算，请将命令写入作业脚本（SLURM/PBS 等）提交。`examples` 目录下包含 `example_slurm.sh`，你可以根据本地软件路径调整并提交：
+
+正式计算时不要在登录节点运行，建议将命令写入 SLURM/PBS 等作业脚本中提交。`examples` 目录下包含 `example_slurm.sh`，可根据本地软件路径调整后使用：
+
 ```bash
 sbatch example_slurm.sh <input-file>
 ```
+
+### 3.2 `autovb_nbo`
+
+`autovb_nbo` 根据 XYZ 坐标文件生成 Gaussian NBO 输入文件。它只负责生成 `.gjf`，不会自动运行 Gaussian 或 NBO；生成后应检查电荷、自旋和计算设置。
+
+```bash
+autovb_nbo <xyz-file> <basis> [-c CHARGE] [-s SPIN | -m MULTIPLICITY]
+```
+
+参数：
+
+- `<xyz-file>`：输入的 `.xyz` 文件。
+- `<basis>`：Gaussian 使用的基组，例如 `6-31g*`。
+- `-c`、`--charge`：体系总电荷，默认值为 `0`。
+- `-s`、`--spin`：自旋数，即未成对电子数，默认值为 `0`。
+- `-m`、`--multiplicity`：自旋多重度，与 `--spin` 二选一，默认值为 `1`。
+
+输出文件名为与 XYZ 同名的 `.gjf` 文件。例如：
+
+```bash
+autovb_nbo C6H6.xyz 6-31g*
+autovb_nbo radical.xyz 6-31g* --charge 0 --multiplicity 2
+```
+
+### 3.3 `autovb_xmi`
+
+`autovb_xmi` 从已有的 Gaussian `.fch`、`.chk` 文件或不带后缀的文件名生成 XMVB `.xmi` 输入文件。它会使用 NBO 结果选择活性空间，并生成 NBO 轨道初猜。
+
+```bash
+autovb_xmi <fch-or-chk> <basis> [options]
+```
+
+参数：
+
+- `<fch-or-chk>`：`.fch`、`.chk` 文件，或可以补全为这些文件的 basename。
+- `<basis>`：写入 XMVB 输入文件的基组文本。
+- `-t`、`--threshold`：活性空间选择阈值，默认值为 `1.96`。
+- `-nae`、`--active_electron`：显式指定活性电子数，默认值为 `0`，表示不显式指定。
+- `-nao`、`--active_orbital`：显式指定活性轨道数，默认值为 `0`，表示不显式指定。
+- `-aoa`、`-aat`、`--active_orbital_atom`：指定活性轨道涉及的原子编号，可以传入多个整数。
+
+例如：
+
+```bash
+autovb_xmi C6H6.fch 6-31g*
+autovb_xmi C6H6.fch 6-31g* -nae 6 -nao 6
+autovb_xmi C6H6.fch 6-31g* -aoa 1 3 5 7 9 11
+```
+
+默认输出与输入同名的 `.xmi` 文件。
+
+### 3.4 `draw_xmo`
+
+`draw_xmo` 读取 XMVB 的 `.xmo` 文件，解析价键结构并生成 SVG 图像。它适合直接查看 XMVB 输出中的价键结构。
+
+```bash
+draw_xmo <xmo-file> [options]
+```
+
+参数：
+
+- `-w`、`--weight {lowdin,cc}`：选择用于排序和绘图的权重表，默认值为 `lowdin`。
+- `-m`、`--max-structures {N,all}`：最多绘制的结构数，默认值为 `20`；使用 `all` 绘制全部结构。
+- `--baseline-index N`：指定用于确定初始电子分布的结构编号，默认使用最高权重结构。
+- `--charge CHARGE`：RDKit 判断键级时使用的总电荷，默认值为 `0`。
+- `--show-hydrogens`：显示氢原子；默认隐藏氢原子。
+- `--write-individual-svgs`：除网格图外，为每个价键结构单独写出 SVG。
+- `-n`、`--structures-per-row N`：网格图每行的结构数，默认值为 `2`。
+- `--hide-atom-labels`：隐藏原子编号。
+- `--hide-lone-pairs`：隐藏孤对电子标记。
+
+例如：
+
+```bash
+draw_xmo C6H6_vb.xmo --max-structures 5 --show-hydrogens
+```
+
+### 3.5 `xmo2svg`
+
+`xmo2svg` 也是将 `.xmo` 转换为 SVG 的工具，但它使用 `.xmo` 中 `$orb` 部分的原子标签建立分子连接关系。对于过渡态、多个分子片段或需要保留 `$orb` 成键关系的体系，通常优先使用该工具。
+
+```bash
+xmo2svg <xmo-file> [options]
+```
+
+参数：
+
+- `-w`、`--weight {lowdin,cc,both}`：选择显示的权重，默认值为 `lowdin`；`both` 同时显示 CC 和 Lowdin 权重。
+- `-m`、`--max-structures {N,all}`：最多绘制的结构数，默认值为 `20`；使用 `all` 绘制全部结构。
+- `--baseline-index N`：指定基准结构编号，默认使用最高权重结构。
+- `--charge CHARGE`：RDKit 判断键级时使用的总电荷，默认值为 `0`。
+- `--projection {rdkit,pca,optimized3d,contact}`：选择原子排布方式，默认值为 `rdkit`。`pca` 和 `optimized3d` 使用输入三维坐标投影，`contact` 适合包含多个分子片段的体系。
+- `--show-hydrogens`：显示氢原子；默认隐藏氢原子。
+- `--no-condensed-hydrogens`：关闭杂原子或孤立碳的紧凑氢原子显示。
+- `--write-individual-svgs`：除网格图外，为每个价键结构单独写出 SVG。
+- `-n`、`--structures-per-row N`：网格图每行的结构数，默认值为 `2`。
+- `--hide-atom-labels`：隐藏原子编号。
+- `--hide-connection-labels`：隐藏结构权重后面的成键原子对和自由基标记。
+- `--hide-lone-pairs`：隐藏孤对电子标记。
+
+例如：
+
+```bash
+xmo2svg R24_vb.xmo --projection optimized3d --weight both
+xmo2svg mens_vb.xmo --projection contact --hide-connection-labels
+```
+
+输出 SVG 文件与 `.xmo` 文件同名，扩展名为 `.svg`；使用 `--write-individual-svgs` 时还会输出各结构对应的单独 SVG 文件。
+
+### 3.6 `fch2vb`
+
+`fch2vb` 调用 MOKIT 的 `fch2inp` 将 Gaussian `.fch` 转换为 GAMESS `.inp`，读取其中的轨道信息，并生成只包含初猜轨道和分子坐标的最小 XMVB `.xmi` 文件。该工具不进行活性空间选择，生成的活性电子数和活性轨道数均为 `0`，轨道类型为 `oeo`。
+
+```bash
+fch2vb <fch-file> [-o OUTPUT] [--basis BASIS] [--norb N]
+```
+
+参数：
+
+- `<fch-file>`：Gaussian formatted checkpoint 文件。
+- `-o`、`--output`：输出 `.xmi` 路径，默认与 `.fch` 同名。
+- `--basis`：写入 XMVB `$ctrl` 的基组文本，默认为空。
+- `--norb`：写入初猜的轨道数，默认取占据轨道数，通常为电子数除以 2。
+
+例如：
+
+```bash
+fch2vb C4H6.fch --basis cc-pVDZ --norb 15 -o C4H6_guess.xmi
+```
+
+### 3.7 `xmo2json`
+
+`xmo2json` 读取 XMVB `.xmo` 文件并生成 JSON 摘要。摘要包含分子信息、`orb` 部分、能量、收敛状态、价键结构和结构权重等结果，便于后续批量统计和数据集处理。
+
+```bash
+xmo2json <xmo-file> [-o OUTPUT]
+```
+
+参数：
+
+- `<xmo-file>`：输入的 XMVB `.xmo` 文件。
+- `-o`、`--output`：输出 JSON 路径，默认与 `.xmo` 同名，扩展名为 `.json`。
+
+例如：
+
+```bash
+xmo2json C6H6_vb.xmo
+xmo2json C6H6_vb.xmo -o results/C6H6.json
+```
+
+### 3.8 `xmo2xmi`
+
+`xmo2xmi` 读取 `.xmi` 文件，并用同目录下与其同名的 `.orb` 文件替换 XMVB 初猜轨道；其余输入内容保持不变。该工具适用于用一次 XMVB 计算生成的 `.orb` 作为下一次计算初猜的情况。
+
+```bash
+xmo2xmi <xmi-file> [-o OUTPUT] [--method METHOD] [--iscf {2,5,6}]
+```
+
+参数：
+
+- `<xmi-file>`：输入的 XMVB `.xmi` 文件，同时需要存在同名 `.orb` 文件。
+- `-o`、`--output`：输出 `.xmi` 路径，默认命名为 `<原文件名>_new.xmi`。
+- `--method METHOD`：替换 `$ctrl` 中的计算方法，例如 `vbpt2` 或 `bovb`；默认不修改方法。
+- `--iscf {2,5,6}`：替换 `$ctrl` 中的 `iscf`；默认不修改 `iscf`。
+
+例如：
+
+```bash
+xmo2xmi C6H6_vb.xmi
+xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
+```
+
+### 3.10 命令选择建议
+
+- 从分子坐标开始进行完整自动计算：使用 `autovb`。
+- 只生成 Gaussian NBO 输入文件：使用 `autovb_nbo`。
+- 已有 `.fch`/`.chk`，只想生成 XMVB `.xmi`：使用 `autovb_xmi`。
+- 已有 `.fch`，只想转换为最小 XMVB 初猜：使用 `fch2vb`。
+- 已有 `.xmo`，需要按普通分子结构绘图：使用 `draw_xmo`。
+- 已有 `.xmo`，需要按 `$orb` 标签或三维投影绘图：使用 `xmo2svg`。
+- 已有 `.xmo`，需要批量提取结果：使用 `xmo2json`。
+- 需要用 `.orb` 替换 `.xmi` 初猜：使用 `xmo2xmi`。
 
 ## 4 示例
 
