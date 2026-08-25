@@ -2,7 +2,7 @@
 
 ---
 ## 1. Introduction
-`autoVB` is an automated tool for performing XMVB calculations from molecular structures. It can automatically run NBO calculations with Gaussian, select the active space, generate an initial guess, prepare XMVB input files, and perform the final calculation. The current version is 0.1.4-dev.
+`autoVB`(v0.1.4) is an intelligent automation tool for XMVB calculations that operates directly from molecular structures. It automatically calls Gaussian for NBO calculations, intelligently chooses the active space, supplies reliable initial guesses, generates XMVB input files, runs the calculations, and delivers visual result analysis—all without manual intervention, thereby greatly reducing the complexity of valence bond theory computations.
 If you are not familiar with valence bond theory, refer to the [XMVB tutorial](https://xmvb.xmu.edu.cn/xmvb-course-cn/).
 
 ### 1.1 Environment Configuration
@@ -118,7 +118,7 @@ Explicitly specifies the number of active electrons. If omitted, `autoVB` select
 ##### 2.3.1.2 nao=n
 Explicitly specifies the number of active orbitals. If omitted, `autoVB` selects the active space automatically from the NBO occupation numbers.
 
-##### 2.3.1.3 aoa=(n1, n2, ...)
+##### 2.3.1.3 aoa/aat=(n1, n2, ...)
 Specifies the Active Orbital Atom sequence, with `aat` as an alias, i.e., the indices of the atoms involved in the active space. For example, `aoa=(1,2,3,4)` or `aat=(1,2,3,4)` automatically searches for NBOs on atoms 1 through 4 and uses them as active orbitals. Atom indices are one-based integers in the range `[1, number of atoms]`. For an `.xmi` input file, this parameter uses the data in the `$actorb` block; see the [input file examples](#21-input-file-examples).
 
 ##### 2.3.1.4 aoi=(n1, n2, ...)
@@ -212,13 +212,11 @@ Parses the `.xmo` file after the XMVB calculation and generates a valence bond s
 **`xmo2svg=contact`**: Arrange separate molecular fragments primarily according to interfragment atom pairs occurring in the valence bond structures. This option is suitable for reactant complexes, transition states, and other systems containing multiple molecular fragments. For a single-fragment molecule, it uses the standard RDKit two-dimensional layout.
 
 ##### 2.3.4.3 hide_svg_labels
-Hide the atom numbers in an `xmo2svg` image and the bonded-atom labels that follow each structure weight. For example, `Lowdin 2 w=0.07160: 3-5 7-9 1-11` is displayed as `Lowdin 2 w=0.07160`. Use this parameter together with `xmo2svg`, for example:
+Hide the atom numbers in an `xmo2svg` image and the bonded-atom labels that follow each structure weight. Use this parameter together with `xmo2svg`, for example:
 
 ```text
 autovb{xmo2svg=rdkit,hide_svg_labels}
 ```
-
-This is equivalent to passing both `--hide-atom-labels` and `--hide-connection-labels` to the standalone command-line tool.
 
 ##### 2.3.4.4 svgweight
 Selects the structure weights displayed in the `xmo2svg` image. Supported values are `cc`, `lowdin`, and `both`; the default is `both`. With `both`, the CC and Lowdin weights are shown on separate lines, while structures are still selected and sorted by Lowdin weight. For example:
@@ -227,7 +225,14 @@ Selects the structure weights displayed in the `xmo2svg` image. Supported values
 autovb{xmo2svg=optimized3d,svgweight=both}
 ```
 
-##### 2.3.4.5 draw_rumer
+##### 2.3.4.5 svgbaseline
+Selects the valence-bond structure used as the baseline structure for `xmo2svg`. The default is `0`, which keeps the current behavior of selecting the highest-weight structure. A positive integer `x` selects structure `x` as the baseline. For example:
+
+```text
+autovb{xmo2svg=optimized3d,svgbaseline=2}
+```
+
+##### 2.3.4.6 draw_rumer
 Generates a molecular `.svg` image when the selected active-space atoms are ordered topologically according to the Rumer rule.
 
 #### 2.3.5 Other Parameters
@@ -258,7 +263,7 @@ This example demonstrates how `autoVB` performs the NBO calculation, automatical
 ```bash
 # vbscf/6-31g*
 
-autovb{}
+autovb{str=cov}
 
 0 1
  C           0.6995000584   1.2115696411   0.0000000000
@@ -305,28 +310,106 @@ The XMVB calculation converges successfully. The key results are:
 | Basis set | 6-31G* |
 | Active space | `(6,6)` |
 | Convergence | Converged |
-| Iterations | 54 |
-| VBSCF energy | -230.71589521 a.u. |
-| Number of valence bond structures | 175 |
+| Iterations | 51 |
+| VBSCF energy | -230.56875969 a.u. |
+| Number of valence bond structures | 5 |
 
-The two most important structures by weight are:
+The five most important structures by weight are:
 
 | Structure | Bonded atom pairs (input atom indices) | CC weight | Lowdin weight |
 | ---: | --- | ---: | ---: |
-| 2 | 3-5, 7-9, 1-11 | 0.10961 | 0.07160 |
-| 5 | 1-3, 5-7, 9-11 | 0.10959 | 0.07159 |
+| 2 | 3-5, 7-9, 1-11 | 0.33116 | 0.24809 |
+| 5 | 1-3, 5-7, 9-11 | 0.33116 | 0.24809 |
+| 1 | 5-7, 3-9, 1-11 | 0.11256 | 0.16794 |
+| 3 | 3-5, 1-7, 9-11 | 0.11256 | 0.16794 |
+| 4 | 1-3, 7-9, 5-11 | 0.11256 | 0.16794 |
 
-These structures correspond to the two Kekule bonding patterns of benzene. Their nearly identical weights are consistent with the symmetry of the molecule. Structures 1, 3, and 4 each have a CC weight of 0.03602 and form the next most important group.
+These five structures correspond to the two Kekule forms and three symmetry-equivalent Dewar forms of benzene; the two Kekule structures have the same maximum weight, consistent with the symmetry of the molecule.
 
 #### 4.1.3 Valence Bond Structure Plot
 
-Plotting uses Lowdin weights by default and displays the selected covalent structures. Red lines represent active bonds in each valence bond structure.
+Plotting uses both CC and Lowdin weights by default. Red lines represent active bonds in each valence bond structure.
 
-<img src="../autoVBtest/workshop/C6H6_vb.svg" alt="C6H6 valence bond structures" width="900">
+<img src="examples/c6h6-str5_vb.svg" alt="C6H6 valence bond structures with 5 structures" width="900">
 
-Structures 2 and 5 at the top are the two Kekule structures of benzene and have nearly identical weights. Structures 1, 3, and 4 are the three symmetry-equivalent Dewar structures; each has a Lowdin weight of 0.04892, which is lower than the approximately 0.07160 weight of either Kekule structure.
+The figure shows five major covalent structures. Structures 2 and 5 are the two Kekule structures and have the highest weights, while structures 1, 3, and 4 are three Dewar-type structures with lower weights. This result shows that, in the full five-structure model, benzene resonance is dominated by the two Kekule structures but also contains a smaller Dewar contribution.
 
-### 4.2 Specifying the Active Space for a Complex System
+### 4.2 Specified-Structure Valence Bond Calculation
+
+If you want to specify particular valence bond structures, you typically need to use the XMVB `.xmi` input format rather than the standard Gaussian format. This example shows how to specify the two Kekule structures in the input file.
+
+The input file is:
+
+```bash
+$ctrl
+autovb
+vbscf
+basis=6-31g*
+$end
+
+$str
+1:18 19 20 21 22 23 24
+1:18 19 24 20 21 22 23
+$end
+
+$geo
+ C           0.6995000584   1.2115696411   0.0000000000
+ H           1.2460106991   2.1581538376   0.0000000000
+ C          -0.6995000584   1.2115696411   0.0000000000
+ H          -1.2460106991   2.1581538376   0.0000000000
+ C          -1.3990001169   0.0000000000   0.0000000000
+ H          -2.4920213982   0.0000000000   0.0000000000
+ C          -0.6995000584  -1.2115696411   0.0000000000
+ H          -1.2460106991  -2.1581538376   0.0000000000
+ C           0.6995000584  -1.2115696411   0.0000000000
+ H           1.2460106991  -2.1581538376   0.0000000000
+ C           1.3990001169   0.0000000000   0.0000000000
+ H           2.4920213982   0.0000000000   0.0000000000
+$end
+```
+
+This is an XMVB `.xmi`-format input file: the `$ctrl` block controls the method, basis set, and image output, the `$str` block gives the connection patterns for two valence bond structures, and the `$geo` block gives the molecular coordinates.
+
+#### 4.2.1 Active-Space Selection
+
+As in the automatic selection in [4.1.1](#411-active-space-selection), the program still selects three pairs of low-occupation `BD`/`BD*` orbitals in benzene, resulting in an active space of `(nae, nao)=(6,6)`.
+
+#### 4.2.2 XMVB Results
+
+The XMVB calculation converges successfully. The key results are:
+
+| Item | Result |
+| --- | --- |
+| Method | VBSCF |
+| Basis set | 6-31G* |
+| Active space | `(6,6)` |
+| Convergence | Converged |
+| Iterations | 49 |
+| VBSCF energy | -230.56408042 a.u. |
+| Number of valence bond structures | 2 |
+
+The two valence bond structures have almost identical weights and correspond to the two Kekule bonding patterns of benzene:
+
+| Structure | Bonded atom pairs (input atom indices) | CC weight | Lowdin weight |
+| ---: | --- | ---: | ---: |
+| 1 | 1-3, 5-7, 9-11 | 0.49999 | 0.49999 |
+| 2 | 1-11, 3-5, 7-9 | 0.50001 | 0.50001 |
+
+This shows that, under the two-structure restriction, the two Kekule structures contribute almost equally to the valence bond wavefunction. Further comparing with the five-structure result in [4.1.1](#411-active-space-selection):
+
+$$
+\Delta E = E_{\text{4.2}} - E_{\text{4.1}} = (-230.56408042) - (-230.56875969) = 0.00467927\ \text{a.u.}
+$$
+
+where $E_{\text{4.1}}=-230.56875969$ a.u. is the final energy of the five-structure model (two Kekule structures plus three Dewar structures), and $E_{\text{4.2}}=-230.56408042$ a.u. is the final energy of the two-Kekule model. This difference is about $2.94$ kcal/mol, indicating that the three Dewar structures provide about $2.94$ kcal/mol of resonance stabilization.
+
+#### 4.2.3 Valence Bond Structure Plot
+
+This figure shows the two Kekule structures. Their weights are nearly identical.
+
+<img src="examples/c6h6-str2_vb.svg" alt="Benzene XMVB input format example" width="900">
+
+### 4.3 Specifying the Active Space for a Complex System
 
 This example demonstrates how atom indices can be used to specify the active space when the default automatic selection does not accurately represent the target reaction region. The input file is shown below:
 
@@ -363,7 +446,7 @@ This molecule is a Diels-Alder reaction transition state and is calculated at th
 - `nolp`: Exclude lone pairs during the NBO search so that the oxygen lone pairs are not included in the target active space.
 - `str=cov`: Generate only covalent valence bond structures without expanding the ionic structures.
 
-#### 4.2.1 Active-Space Selection
+#### 4.3.1 Active-Space Selection
 
 The NBO calculation produces 68 electrons, 34 occupied orbitals, and 121 virtual orbitals. According to the user-specified `aoa` sequence and the `nolp` rule, the program selects 4 occupied active orbitals and adds the corresponding unoccupied orbital for each one. The resulting active space is `(nae, nao)=(8,8)`:
 
@@ -375,7 +458,7 @@ The NBO calculation produces 68 electrons, 34 occupied orbitals, and 121 virtual
 | Inactive occupied orbitals | 30 |
 | Active atom order | 5, 4, 2, 1, 6, 7, 8, 9 |
 
-#### 4.2.2 XMVB Results
+#### 4.3.2 XMVB Results
 
 The XMVB calculation converges successfully. The key results are:
 
@@ -402,10 +485,10 @@ The five structures with the largest Lowdin weights are:
 
 Structure 12 has the largest weight and is the dominant covalent structure in this calculation. Structures 11 and 14 also make substantial contributions.
 
-#### 4.2.3 Valence Bond Structure Plot
+#### 4.3.3 Valence Bond Structure Plot
 
-The image generated after the calculation uses Lowdin weights to order all 14 covalent structures and searches the input three-dimensional coordinates for a clear two-dimensional viewing direction. Red lines represent active-space electron pairs, black lines represent the underlying molecular connectivity, and the label below each structure gives its index, weight, and bonded atom pairs.
+After the calculation, the image is generated by ordering all 14 covalent structures with Lowdin weights and searching for a clear 2D projection from the input 3D coordinates. Red lines represent active-space electron pairing, black lines represent the underlying molecular connectivity, and each structure is labeled with its index, weight, and bonded atom pairs.
 
-<img src="../autoVBtest/workshop/R24_vb.svg" alt="R24 valence bond structures" width="900">
+<img src="examples/R24_vb.svg" alt="R24 valence bond structures" width="900">
 
-Structure 12 in the upper-left corner has the largest Lowdin weight, with active-electron pairs 5-4, 1-6, 2-7, and 8-9. The remaining structures show alternative electron-pairing patterns among the same active atoms, providing a direct view of the relative contribution of each covalent structure to the total wavefunction.
+Structure 12 in the upper-left corner has the largest weight, with active electron pairing 5-4, 1-6, 2-7, and 8-9. The remaining structures show alternative electron-pairing patterns among the same active atoms, providing a direct view of the relative contribution of each covalent structure to the total wavefunction.

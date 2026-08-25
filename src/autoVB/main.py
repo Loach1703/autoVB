@@ -69,6 +69,7 @@ class VBSettings:
     draw_xmo: bool = False
     xmo2svg: Optional[str] = "optimized3d"
     svgweight: str = "both"
+    svgbaseline: int = 0
     hide_svg_labels: bool = True
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
@@ -120,6 +121,9 @@ class VBSettings:
             raise ValueError(
                 "VBSettings: 'svgweight' must be 'cc', 'lowdin', or 'both'"
             )
+
+        if self.svgbaseline < 0:
+            raise ValueError("VBSettings: 'svgbaseline' must be >= 0")
 
         # acitve_order的动态默认值：如果有aoa，则默认按照aoa顺序，否则设为rumer
         if self.active_order == "default":
@@ -487,6 +491,7 @@ class autoVBMain:
         projection: str,
         hide_svg_labels: bool = False,
         weight_table: str = "both",
+        svgbaseline: int = 0,
     ):
         """调用 xmo2svg，按指定三维或二维排布方式生成 SVG。"""
         from .cli.xmo2svg import xmo2svg_file
@@ -495,6 +500,7 @@ class autoVBMain:
             xmo_file,
             projection=projection,
             weight_table=weight_table,
+            baseline_index=None if svgbaseline == 0 else svgbaseline,
             show_atom_labels=not hide_svg_labels,
             show_connection_labels=not hide_svg_labels,
         )
@@ -721,6 +727,7 @@ class autoVBMain:
                 self.input_data.vbsettings.xmo2svg,
                 self.input_data.vbsettings.hide_svg_labels,
                 self.input_data.vbsettings.svgweight,
+                self.input_data.vbsettings.svgbaseline,
             )
 
         if (
