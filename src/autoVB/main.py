@@ -69,7 +69,7 @@ class VBSettings:
     draw_xmo: bool = False
     xmo2svg: Optional[str] = "optimized3d"
     svgweight: str = "both"
-    svgbaseline: int = 0
+    svgbaseline: int = 1
     hide_svg_labels: bool = True
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
@@ -249,12 +249,12 @@ class autoVBMain:
 
     def _check_gaussian_env(self):
         self.gaussian_exe = find_executable_in_env()
-        logger.info(f"find Gaussian execution: {self.gaussian_exe}")
+        # logger.info(f"find Gaussian execution: {self.gaussian_exe}")
 
     def _check_formchk_env(self):
         # 检查 formchk
         self.formchk_exe = find_tool("formchk")
-        logger.info(f"find formchk execution: {self.formchk_exe}")
+        # logger.info(f"find formchk execution: {self.formchk_exe}")
 
     def _check_xmvb_env(self):
         self.xmvb_exe = find_tool("xmvb")
@@ -262,7 +262,7 @@ class autoVBMain:
 
     def _check_automr_env(self):
         self.automr_exe = find_tool("automr")
-        logger.info(f"find MOKIT automr execution: {self.automr_exe}")
+        # logger.info(f"find MOKIT automr execution: {self.automr_exe}")
 
     def _check_gamess_env(self):
         # GAMESS的环境变量检查比较特殊，优先检查GMS环境变量，如果存在则直接使用；如果不存在，则尝试在系统路径中寻找rungms工具
@@ -272,17 +272,17 @@ class autoVBMain:
             if gms_path.exists() and os.access(gms_path, os.X_OK):
                 self.gamess_exe = str(gms_path)
                 os.environ["GMS"] = self.gamess_exe
-                logger.info(f"find GAMESS execution from GMS: {self.gamess_exe}")
+                # logger.info(f"find GAMESS execution from GMS: {self.gamess_exe}")
                 return
             gms_tool = find_tool(gms_env)
             if gms_tool:
                 self.gamess_exe = gms_tool
                 os.environ["GMS"] = self.gamess_exe
-                logger.info(f"find GAMESS execution from GMS: {self.gamess_exe}")
+                # logger.info(f"find GAMESS execution from GMS: {self.gamess_exe}")
                 return
 
         self.gamess_exe = find_tool("rungms")
-        logger.info(f"find GAMESS execution: {self.gamess_exe}")
+        # logger.info(f"find GAMESS execution: {self.gamess_exe}")
 
     def read_nbo(self) -> 'XMVBNBO':
         '''
@@ -318,7 +318,7 @@ class autoVBMain:
         )
         from .io.writers import write_gjf_nbo_file
         write_gjf_nbo_file(mol, self.nbo_gjf_name, method=method, mem=self.input_data.mem, nproc=self.input_data.nproc)
-        logger.info(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
+        # logger.info(f"Wrote Gaussian NBO input file to {self.nbo_gjf_name}.gjf with basis {basis}, charge {charge}, spin {spin}")
 
     def generate_automr_gvb(self):
         basis = self.input_data.basis
@@ -391,7 +391,7 @@ class autoVBMain:
         logger.info(f"Generated XMVB input file {xmi_path} successfully from GVB orbitals.")
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
-        logger.info(f"Running command: {command}")
+        # logger.info(f"Running command: {command}")
         proc_return = subprocess.run(command, shell=True, check=False)
         if proc_return.returncode != 0:
             logger.error(f"{error_message} with return code {proc_return.returncode}. Check error output for details.")
@@ -401,11 +401,21 @@ class autoVBMain:
 
     def run_gaussian(self, input_name: str):
         gaussian_cmd = f"{self.gaussian_exe} < {input_name}.gjf 1>{input_name}.out 2>{input_name}.err"
-        self.run_subprocess_command(gaussian_cmd, f"Gaussian execution completed successfully for {input_name}.gjf.", f"Gaussian execution failed for {input_name}.gjf, check {input_name}.err and {input_name}.out for details.")
+        self.run_subprocess_command(gaussian_cmd, f"NBO execution completed successfully.", f"NBO execution failed for {input_name}.gjf, check {input_name}.err and {input_name}.out for details.")
 
     def run_formchk(self, input_name: str):
-        formchk_cmd = f"{self.formchk_exe} {input_name}.chk {input_name}.fch"
-        self.run_subprocess_command(formchk_cmd, f"formchk execution completed successfully for {input_name}.chk.", f"formchk execution failed for {input_name}.chk, may be Gaussian calculation failed.")
+        formchk_cmd = (
+            f"{self.formchk_exe} {input_name}.chk {input_name}.fch > /dev/null"
+        )
+        self.run_subprocess_command(formchk_cmd, f"", f"formchk execution failed for {input_name}.chk, may be Gaussian calculation failed.")
+
+    def remove_nbo_files(self):
+        patterns = [f"{self.nbo_gjf_name}.*"]
+        if self.nbo_gjf_name.endswith("_nbo"):
+            patterns.append(f"{self.nbo_gjf_name.upper()}.*")
+        for pattern in patterns:
+            for path in Path.cwd().glob(pattern):
+                path.unlink()
 
     def run_automr_gvb(self):
         automr_cmd = f"{self.automr_exe} {self.automr_gvb_name}.gjf 1>{self.automr_gvb_name}.out 2>{self.automr_gvb_name}.err"
@@ -654,9 +664,9 @@ class autoVBMain:
         # 进行 NBO 计算，生成 .fch 文件供后续提取轨道信息使用
         if self.input_data.vbsettings.nbo_file:
             self.nbo_gjf_name = self.input_data.vbsettings.nbo_file.stem
-            logger.info(f"User specified the NBO file directly, skipping Gaussian NBO calculation. NBO file: {self.input_data.vbsettings.nbo_file}")
+            logger.info(f"User specified the NBO file directly, skipping NBO calculation. NBO file: {self.input_data.vbsettings.nbo_file}")
         else:
-            log_subroutine("Entry Gaussian NBO Calculation")
+            # log_subroutine("Entry NBO Calculation")
             if not self.gaussian_exe:
                 raise EnvironmentError("Gaussian executable not found in environment. Please install Gaussian and ensure it is in your PATH.")
             if not self.formchk_exe:
@@ -679,7 +689,7 @@ class autoVBMain:
             log_subroutine("Entry GVB to XMI Conversion")
             self.timed_call("generate_gvb_to_xmi", self.generate_gvb_to_xmi)
         else:
-            log_subroutine("Entry NBO to XMI Conversion")
+            # log_subroutine("Entry NBO to XMI Conversion")
             self.timed_call("generate_nbo_to_xmi", self.generate_nbo_to_xmi)
 
         # VB计算是可选的，如果novb设置为True，则跳过VB计算步骤，仅生成 .xmi 文件
@@ -737,6 +747,9 @@ class autoVBMain:
         ):
             from .io.writers import write_json_summary
             self.timed_call("write_json_summary", write_json_summary, self.input_data, self.parsed_data)
+
+        if not self.input_data.vbsettings.nbo_file:
+            self.remove_nbo_files()
 
         workflow_elapsed = (datetime.datetime.now() - workflow_start).total_seconds()
 

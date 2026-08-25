@@ -151,16 +151,16 @@ class XMVBNBO:
         self.nbo_parser = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug, spin="alpha")
 
         if self.input_data.vbsettings.guess == 'pnbo':
-            logger.info("Using PNBO orbitals as initial guess.")
+            # logger.info("Using PNBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.pnbo_orbital_matrix
         else:
-            logger.info("Using NBO orbitals as initial guess.")
+            # logger.info("Using NBO orbitals as initial guess.")
             self.orbital_matrix = self.nbo_parser.nbo_orbital_matrix
 
         # 如果是开壳层系统，除了读取alpha轨道的占据数
         if self.mol.spin > 0:
-            logger.info("Detected open-shell system, parsing both alpha and beta NBO occupation numbers...")
-            logger.info("Using alpha + beta NBO occupation numbers for open-shell active space selection.")
+            # logger.info("Detected open-shell system, parsing both alpha and beta NBO occupation numbers...")
+            # logger.info("Using alpha + beta NBO occupation numbers for open-shell active space selection.")
             self.nbo_parser_beta = GaussianNBOParser(self.nbo_out_file, self.nbo_orb_file, self.mol, debug=self.input_data.debug, spin="beta")
             # combined_occupation_numbers = self.nbo_parser.occupation_numbers * 2
             # self.nbo_parser.occupation_numbers = combined_occupation_numbers
@@ -513,12 +513,12 @@ class XMVBNBO:
             f"Automatically selected active space by default thresholds: "
             f"{nae} electrons / {nao} orbitals."
         )
-        logger.info(
-            f"Default thresholds: BD<{threshold_bd_bonding:.3f}, "
-            f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
-            f"BD*-strong>{threshold_strong_antibonding:.3f}, "
-            f"LP<{threshold_lp:.3f}"
-        )
+        # logger.info(
+        #     f"Default thresholds: BD<{threshold_bd_bonding:.3f}, "
+        #     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+        #     f"BD*-strong>{threshold_strong_antibonding:.3f}, "
+        #     f"LP<{threshold_lp:.3f}"
+        # )
         # 如果选择轨道不为空，则打印每个被选中轨道的详细信息，包括轨道编号、类型、占据数、对应原子以及被选中的原因
         if selected_items:
             for item in selected_items:
@@ -533,11 +533,11 @@ class XMVBNBO:
                     pair = self.nbo_parser.bond_antibond_pair_by_bond_index.get(orbital.index)
                     if pair is not None:
                         antibond_occ_text = f", BD* occ={pair.antibond.occupancy:.5f}"
-                logger.info(
-                    f"Selected NBO orbital {orbital.index}: "
-                    f"{orbital.orbital_type}({orbital.orbital_number}) "
-                    f"occ={orbital.occupancy:.5f}{antibond_occ_text}, atom(s): {atom_name}, reason: {reason_text}"
-                )
+                # logger.info(
+                #     f"Selected NBO orbital {orbital.index}: "
+                #     f"{orbital.orbital_type}({orbital.orbital_number}) "
+                #     f"occ={orbital.occupancy:.5f}{antibond_occ_text}, atom(s): {atom_name}, reason: {reason_text}"
+                # )
         else:
             logger.info("No active orbitals selected by default thresholds.")
 
@@ -561,12 +561,12 @@ class XMVBNBO:
                     threshold_strong_antibonding,
                     threshold_lp,
                 )
-                logger.info(
-                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
-                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
-                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
-                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
-                )
+                # logger.info(
+                #     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                #     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                #     f"BD*-strong>{threshold_strong_antibonding:.3f}, "
+                #     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                # )
                 if under_limit(nae, nao):
                     break
 
@@ -583,12 +583,12 @@ class XMVBNBO:
                     threshold_strong_antibonding,
                     threshold_lp,
                 )
-                logger.info(
-                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
-                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
-                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
-                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
-                )
+                # logger.info(
+                #     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                #     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                #     f"BD*-strong>{threshold_strong_antibonding:.3f}, "
+                #     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                # )
                 if under_limit(nae, nao):
                     break
 
@@ -605,12 +605,12 @@ class XMVBNBO:
                     threshold_strong_antibonding,
                     threshold_lp,
                 )
-                logger.info(
-                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
-                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
-                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
-                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
-                )
+                # logger.info(
+                #     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                #     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                #     f"BD*-strong>{threshold_strong_antibonding:.3f}, "
+                #     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                # )
                 if under_limit(nae, nao):
                     break
 
@@ -624,12 +624,12 @@ class XMVBNBO:
                     threshold_strong_antibonding,
                     threshold_lp,
                 )
-                logger.info(
-                    f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
-                    f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
-                    f"BD*-strong>{threshold_strong_antibonding:.3f}, "
-                    f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
-                )
+                # logger.info(
+                #     f"Trying default thresholds: BD<{threshold_bd_bonding:.3f}, "
+                #     f"BD-BD*: BD<{threshold_bd_bonding_star:.3f} and BD*>{threshold_bd_antibonding:.3f}, "
+                #     f"BD*-strong>{threshold_strong_antibonding:.3f}, "
+                #     f"LP<{threshold_lp:.3f}: {nae} electrons / {nao} orbitals"
+                # )
                 if under_limit(nae, nao):
                     break
 
