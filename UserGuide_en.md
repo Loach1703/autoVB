@@ -225,7 +225,14 @@ Selects the structure weights displayed in the `xmo2svg` image. Supported values
 autovb{xmo2svg=optimized3d,svgweight=both}
 ```
 
-##### 2.3.4.5 draw_rumer
+##### 2.3.4.5 svgbaseline
+Selects the valence-bond structure used as the baseline structure for `xmo2svg`. The default is `0`, which keeps the current behavior of selecting the highest-weight structure. A positive integer `x` selects structure `x` as the baseline. For example:
+
+```text
+autovb{xmo2svg=optimized3d,svgbaseline=2}
+```
+
+##### 2.3.4.6 draw_rumer
 Generates a molecular `.svg` image when the selected active-space atoms are ordered topologically according to the Rumer rule.
 
 #### 2.3.5 Other Parameters

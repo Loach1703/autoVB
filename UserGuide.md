@@ -217,7 +217,14 @@ autovb{xmo2svg=rdkit,hide_svg_labels}
 autovb{xmo2svg=optimized3d,svgweight=both}
 ```
 
-##### 2.3.4.5 draw_rumer
+##### 2.3.4.5 svgbaseline
+指定 `xmo2svg` 使用哪一个价键结构作为基准结构。默认值为 `0`，表示继续使用权重最高的结构；设置为正整数 `x` 时，使用第 `x` 个结构作为基准。例如：
+
+```text
+autovb{xmo2svg=optimized3d,svgbaseline=2}
+```
+
+##### 2.3.4.6 draw_rumer
 使用 Rumer 规则选择的活性空间原子在分子中的拓扑顺序排序时，生成分子 `.svg` 图像文件。
 
 #### 2.3.5 其他参数

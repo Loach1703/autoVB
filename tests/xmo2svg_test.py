@@ -16,6 +16,7 @@ from autoVB.main import VBSettings, autoVBMain
 def test_xmo2svg_workflow_setting_defaults_to_none():
     assert VBSettings().xmo2svg is None
     assert VBSettings().svgweight == "both"
+    assert VBSettings().svgbaseline == 0
     assert VBSettings().hide_svg_labels is False
 
 
@@ -37,6 +38,16 @@ def test_xmo2svg_workflow_setting_parses_weight_table():
     )
 
     assert settings.svgweight == "cc"
+
+
+def test_xmo2svg_workflow_setting_parses_baseline():
+    parser = autoVBInputParser.__new__(autoVBInputParser)
+
+    settings = parser.parse_autovb_options(
+        "job autovb{xmo2svg=rdkit,svgbaseline=3}"
+    )
+
+    assert settings.svgbaseline == 3
 
 
 def test_xmo2svg_workflow_setting_parses_hide_svg_labels():
@@ -70,6 +81,11 @@ def test_xmo2svg_workflow_setting_rejects_unknown_weight_table():
         VBSettings(svgweight="unknown").validate()
 
 
+def test_xmo2svg_workflow_setting_rejects_negative_baseline():
+    with pytest.raises(ValueError, match="svgbaseline"):
+        VBSettings(svgbaseline=-1).validate()
+
+
 def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
     from autoVB.cli import xmo2svg as xmo2svg_module
 
@@ -82,12 +98,14 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
         show_atom_labels,
         show_connection_labels,
         weight_table,
+        baseline_index,
     ):
         captured["xmo_file"] = xmo_file
         captured["projection"] = projection
         captured["show_atom_labels"] = show_atom_labels
         captured["show_connection_labels"] = show_connection_labels
         captured["weight_table"] = weight_table
+        captured["baseline_index"] = baseline_index
         return "result"
 
     monkeypatch.setattr(
@@ -111,6 +129,7 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
         "show_atom_labels": False,
         "show_connection_labels": False,
         "weight_table": "both",
+        "baseline_index": None,
     }
 
 
