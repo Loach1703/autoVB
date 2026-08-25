@@ -60,16 +60,16 @@ class VBSettings:
     stru: str = "default"
     sort: bool = False
     novb: bool = False
-    bovb_stream: bool = False
+    bovb_stream: bool = True
     nogvb: bool = False
     nojson: bool = False
     guess: str = "nbo"
     active_order: str = "default"
     nbo_file: Path = None
     draw_xmo: bool = False
-    xmo2svg: Optional[str] = None
+    xmo2svg: Optional[str] = "optimized3d"
     svgweight: str = "both"
-    hide_svg_labels: bool = False
+    hide_svg_labels: bool = True
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
 
