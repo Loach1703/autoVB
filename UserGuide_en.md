@@ -142,7 +142,7 @@ Controls how the active orbitals are reordered. The default is `rumer`; when [ao
 **none**: Do not reorder the active orbitals.
 
 ##### 2.3.1.8 aoa_bond=(n1, n2, ...)
-Specifies the atom sequence for bonding active orbitals. For example, `aoa_old=(1,2,3,4)` indicates bonds between atoms 1 and 2 and between atoms 3 and 4; these two bonds are then selected for the active space. If an odd number of indices is supplied, the final atom is interpreted as a lone pair. Atom indices are one-based integers in the range `[1, number of atoms]`. This option cannot handle an intended active space containing more than one lone pair correctly, because two lone-pair atoms would be interpreted as a bond. Therefore, this option is not recommended in that case.
+Specifies the atom sequence for bonding active orbitals. For example, `aoa_bond=(1,2,3,4)` indicates bonds between atoms 1 and 2 and between atoms 3 and 4; these two bonds are then selected for the active space. If an odd number of indices is supplied, the final atom is interpreted as a lone pair. Atom indices are one-based integers in the range `[1, number of atoms]`. This option cannot handle an intended active space containing more than one lone pair correctly, because two lone-pair atoms would be interpreted as a bond. Therefore, this option is not recommended in that case.
 
 ##### 2.3.1.9 bond_first
 A sub-option of [aoa](#2313-aoan1-n2-). When enabled, bonding orbitals are searched before lone pairs. It can be enabled when the intended active space does not contain low-occupation lone pairs.
@@ -196,7 +196,7 @@ Applies only to the BOVB method. When enabled, autoVB first runs a VBSCF calcula
 #### 2.3.4 Plotting Parameters
 
 ##### 2.3.4.1 draw_xmo
-Invokes the `draw_xmo` tool to parse the `.xmo` file and generate an `.svg` image of the molecular valence bond structures. The generated molecular layout is provided for reference and may contain errors.
+`draw_xmo` is an alias for `xmo2svg`. It uses the same projection value, for example, `autovb{draw_xmo=optimized3d}` is equivalent to `autovb{xmo2svg=optimized3d}`. The generated molecular layout is provided for reference and may contain errors.
 
 ##### 2.3.4.2 xmo2svg
 Parses the `.xmo` file after the XMVB calculation and generates a valence bond structure `.svg` image with the same base name as the `.xmo` file. The syntax is `autovb{xmo2svg=projection-method}`. The following options are supported:
@@ -219,7 +219,7 @@ autovb{xmo2svg=rdkit,hide_svg_labels}
 ```
 
 ##### 2.3.4.4 svgweight
-Selects the structure weights displayed in the `xmo2svg` image. Supported values are `cc`, `lowdin`, and `both`; the default is `both`. With `both`, the CC and Lowdin weights are shown on separate lines, while structures are still selected and sorted by Lowdin weight. For example:
+Selects the structure weights displayed in the `xmo2svg` image. Supported values are `cc`, `lowdin`, `inverse`, `renormalized`, and `both`; the default is `both`. With `both`, the CC and Lowdin weights are shown on separate lines, while structures are still selected and sorted by Lowdin weight. For example:
 
 ```text
 autovb{xmo2svg=optimized3d,svgweight=both}
@@ -240,7 +240,32 @@ Generates a molecular `.svg` image when the selected active-space atoms are orde
 ##### 2.3.5.1 debug
 Enables debug mode and prints additional output.
 
-### 3. Submitting Jobs
+## 3. Command-Line Tools
+
+After installing `autoVB`, the following commands are available through the Python package script entry points. Run `<command> --help` to see the available options. Unless otherwise noted, run commands in the directory containing the input files.
+
+### 3.1 `autovb`
+
+`autovb` is the main entry point. It runs the complete autoVB workflow from an `.autovb`, Gaussian `.gjf`, or XMVB `.xmi` input, including NBO/GVB guess preparation, active-space selection, XMVB input generation, calculation, result parsing, and plotting.
+
+```bash
+autovb <input-file> [--mem MEM] [--nproc NPROC]
+```
+
+Arguments:
+
+- `<input-file>`: Input file path.
+- `--mem MEM`: Override the memory setting in the input file, for example `4GB`, `8G`, or `4000MB`.
+- `--nproc NPROC`: Override the number of parallel processes in the input file.
+
+The `--mem` and `--nproc` options override the memory and CPU settings in the input file. For example:
+
+```bash
+autovb C6H6.autovb --mem 8GB --nproc 8
+```
+
+#### 3.1.1 Job Submission
+
 After configuring the environment variables, run `autoVB` from a terminal by supplying an input file:
 ```bash
 autovb <input-file>
@@ -253,6 +278,168 @@ Do not run calculations on a login node. Put the command in a SLURM, PBS, or sim
 ```bash
 sbatch example_slurm.sh <input-file>
 ```
+
+### 3.2 `xyz2nbo`
+
+`xyz2nbo` generates a Gaussian NBO `.gjf` input file from an `.xyz` geometry. It only writes the input file; it does not run Gaussian or NBO automatically.
+
+```bash
+xyz2nbo <xyz-file> <basis> [-c CHARGE] [-s SPIN | -m MULTIPLICITY]
+```
+
+Arguments:
+
+- `<xyz-file>`: Input `.xyz` file.
+- `<basis>`: Gaussian basis set, such as `6-31g*`.
+- `-c`/`--charge`: Total molecular charge, default `0`.
+- `-s`/`--spin`: Number of unpaired electrons, default `0`.
+- `-m`/`--multiplicity`: Spin multiplicity, mutually exclusive with `--spin`, default `1`.
+
+The output is a `.gjf` file with the same base name as the XYZ file.
+
+For example:
+
+```bash
+xyz2nbo C6H6.xyz 6-31g*
+xyz2nbo radical.xyz 6-31g* --charge 0 --multiplicity 2
+```
+
+### 3.3 `nbo2xmi`
+
+`nbo2xmi` generates an XMVB `.xmi` input from an existing Gaussian `.fch` or `.chk` NBO result. It uses the NBO result to select the active space and generate the NBO orbital initial guess.
+
+```bash
+nbo2xmi <fch-or-chk> <basis> [options]
+```
+
+Arguments:
+
+- `<fch-or-chk>`: An `.fch` or `.chk` file, or a basename that can be completed to one of these files.
+- `<basis>`: Basis-set text written to the XMVB input file.
+- `-t`/`--threshold`: Active-space selection threshold, default `1.96`.
+- `-nae`/`--active_electron`: Explicit number of active electrons, default `0`.
+- `-nao`/`--active_orbital`: Explicit number of active orbitals, default `0`.
+- `-aoa`/`-aat`/`--active_orbital_atom`: Atom indices involved in the active orbitals; multiple integers can be supplied.
+
+The output is an `.xmi` file with the same base name as the input.
+
+For example:
+
+```bash
+nbo2xmi C6H6.fch 6-31g*
+nbo2xmi C6H6.fch 6-31g* -nae 6 -nao 6
+nbo2xmi C6H6.fch 6-31g* -aoa 1 3 5 7 9 11
+```
+
+### 3.4 `xmo2svg`
+
+`xmo2svg` reads an XMVB `.xmo` output and generates SVG valence-bond structure images. Use `--connectivity` to select the connectivity source: `$orb` labels are used by default, while `rdkit` uses RDKit bond perception.
+
+```bash
+xmo2svg <xmo-file> [--connectivity {orb,rdkit}] [options]
+```
+
+Arguments:
+
+- `--connectivity {orb,rdkit}`: Connectivity source, default `orb`. `orb` uses `$orb` labels and `rdkit` uses RDKit bond perception.
+- `-w`/`--weight {lowdin,cc,inverse,renormalized,both}`: Weight table used for display and ordering, default `lowdin`; `both` displays CC and Lowdin weights together.
+- `-m`/`--max-structures {N,all}`: Maximum number of structures to draw, default `20`; use `all` to draw every structure.
+- `--baseline-index N`: Baseline structure index, defaulting to the highest-weight structure.
+- `--charge CHARGE`: Total charge used by RDKit for bond-order perception, default `0`.
+- `--projection {rdkit,pca,optimized3d,contact}`: Atom layout method, default `rdkit`.
+- `--show-hydrogens`: Show hydrogen atoms; hidden by default.
+- `--no-condensed-hydrogens`: Disable compact hydrogen labels for heteroatoms or isolated carbon atoms.
+- `--write-individual-svgs`: Write one SVG for each structure in addition to the grid SVG.
+- `-n`/`--structures-per-row N`: Number of structures per grid row, default `2`.
+- `--hide-atom-labels`: Hide atom-number labels.
+- `--hide-connection-labels`: Hide bonded-atom and radical labels after each structure weight.
+- `--hide-lone-pairs`: Hide lone-pair markers.
+
+Examples:
+
+```bash
+xmo2svg C6H6_vb.xmo --connectivity rdkit
+xmo2svg R24_vb.xmo --projection optimized3d --weight both
+xmo2svg mens_vb.xmo --projection contact --hide-connection-labels
+```
+
+`draw_xmo` is an alias for `xmo2svg` and accepts the same arguments.
+
+### 3.5 `fch2vb`
+
+`fch2vb` converts a Gaussian `.fch` file to GAMESS `.inp` through MOKIT's `fch2inp`, reads the orbital information, and writes a minimal XMVB `.xmi` containing the molecular geometry and initial-guess orbitals. It does not select an active space; `nae` and `nao` are both written as `0`, with `orbtyp=oeo`.
+
+`fch2xmi` is an alias for `fch2vb`.
+
+```bash
+fch2vb <fch-file> [-o OUTPUT] [--basis BASIS] [--norb N]
+fch2xmi <fch-file> [-o OUTPUT] [--basis BASIS] [--norb N]
+```
+
+Arguments:
+
+- `<fch-file>`: Gaussian formatted checkpoint file.
+- `-o`/`--output`: Output `.xmi` path, defaulting to the `.fch` base name.
+- `--basis`: Basis-set text written to XMVB `$ctrl`, default empty.
+- `--norb`: Number of orbitals in the initial guess, defaulting to the number of occupied orbitals.
+
+For example:
+
+```bash
+fch2vb C4H6.fch --basis cc-pVDZ --norb 15 -o C4H6_guess.xmi
+```
+
+### 3.6 `xmo2json`
+
+`xmo2json` converts an XMVB `.xmo` output into a JSON summary containing molecular information, the `orb` section, energies, convergence status, valence-bond structures, and structure weights.
+
+```bash
+xmo2json <xmo-file> [-o OUTPUT]
+```
+
+Arguments:
+
+- `<xmo-file>`: Input XMVB `.xmo` file.
+- `-o`/`--output`: Output JSON path, defaulting to the `.xmo` base name with a `.json` extension.
+
+For example:
+
+```bash
+xmo2json C6H6_vb.xmo
+xmo2json C6H6_vb.xmo -o results/C6H6.json
+```
+
+### 3.7 `xmo2xmi`
+
+`xmo2xmi` reads an `.xmi` file and replaces its initial-guess orbitals with the same-directory `.orb` file, while keeping the other input sections unchanged.
+
+```bash
+xmo2xmi <xmi-file> [-o OUTPUT] [--method METHOD] [--iscf {2,5,6}]
+```
+
+Arguments:
+
+- `<xmi-file>`: Input XMVB `.xmi` file; a same-name `.orb` file must also exist.
+- `-o`/`--output`: Output `.xmi` path, defaulting to `<input-name>_new.xmi`.
+- `--method METHOD`: Replace the method in `$ctrl`, for example `vbpt2` or `bovb`; unchanged by default.
+- `--iscf {2,5,6}`: Replace `iscf` in `$ctrl`; unchanged by default.
+
+For example:
+
+```bash
+xmo2xmi C6H6_vb.xmi
+xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
+```
+
+### 3.8 Command Selection
+
+- Complete workflow from a molecular input: use `autovb`.
+- Generate only a Gaussian NBO input: use `xyz2nbo`.
+- Generate an XMVB `.xmi` from an NBO `.fch`/`.chk`: use `nbo2xmi`.
+- Convert an `.fch` file to a minimal XMVB initial guess: use `fch2vb` or `fch2xmi`.
+- Plot an `.xmo` output: use `xmo2svg` or `draw_xmo`.
+- Extract an `.xmo` result summary: use `xmo2json`.
+- Replace an `.xmi` initial guess with an `.orb` file: use `xmo2xmi`.
 
 ## 4. Examples
 

@@ -32,7 +32,7 @@ def autovb_xmi_impl(name: str, mol: gto.Mole, input_data: autoVBInputData) -> in
 
 
 def autovb_xmi(argv=None):
-    parser = argparse.ArgumentParser(prog="autovb-xmi", description="Generate XMVB .xmi from .fch/.chk or basename")
+    parser = argparse.ArgumentParser(prog="nbo2xmi", description="Generate XMVB .xmi from .fch/.chk or basename")
     parser.add_argument("file", type=Path, help="NBO output .fch/.chk file or basename (without extension)")
     parser.add_argument("basis", help="basis set override for xmi header")
     parser.add_argument("--threshold", "-t", type=float, default=1.96, help="threshold for selecting important structures based on cc weight, default 1.96 (corresponding to 95%% cumulative weight)")
