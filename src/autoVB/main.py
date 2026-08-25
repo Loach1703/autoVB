@@ -401,7 +401,7 @@ class autoVBMain:
 
     def run_gaussian(self, input_name: str):
         gaussian_cmd = f"{self.gaussian_exe} < {input_name}.gjf 1>{input_name}.out 2>{input_name}.err"
-        self.run_subprocess_command(gaussian_cmd, f"NBO execution completed successfully.", f"NBO execution failed for {input_name}.gjf, check {input_name}.err and {input_name}.out for details.")
+        self.run_subprocess_command(gaussian_cmd, f"", f"NBO execution failed for {input_name}.gjf, check {input_name}.err and {input_name}.out for details.")
 
     def run_formchk(self, input_name: str):
         formchk_cmd = (

@@ -1,6 +1,6 @@
 import re
 
-VERSION = "0.1.4-260730-XMVBCLOUD"
+VERSION = "0.1.4-260825-XMVBCLOUD"
 FLOAT_RE = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$')
 BASIS_FUNCTION_DICT = {
     'S': 'S',
