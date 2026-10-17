@@ -254,6 +254,19 @@ class XMVBNBO:
 
         return self.inactive_orbital_matrix, self.active_orbital_matrix
 
+    def set_initial_guess_orbitals(self, orbital_matrix: np.ndarray) -> None:
+        """使用同序的外部轨道矩阵替换 inactive 和 active 初猜轨道。"""
+        self.inactive_orbital_matrix = orbital_matrix[self.inactive_indices]
+        self.active_orbital_matrix = orbital_matrix[self.active_indices]
+        expanded_active = sum(len(atoms) for atoms in self.active_orb_atom)
+        logger.info(
+            "Prepared BLW initial guess: %s inactive orbitals, %s active source orbitals, "
+            "%s active orbitals after expansion.",
+            self.inactive_orbital_matrix.shape[0],
+            self.active_orbital_matrix.shape[0],
+            expanded_active,
+        )
+
     ##### 自动选择活性空间 #####
 
     def auto_select_active_space_thre(self, threshold: float=1.8, auto_set=False) -> tuple[int, int, List[int]]:
@@ -1200,9 +1213,9 @@ class XMVBNBO:
 
     ##### 最终生成XMVB输入文件所需数据的函数 #####
 
-    def get_xmidata(self) -> 'XMIData':
+    def get_xmidata(self, method_override: Optional[str] = None) -> 'XMIData':
         vbsetting = self.input_data.vbsettings
-        method = self.input_data.method.lower()
+        method = (method_override or self.input_data.method).lower()
         iscf = vbsetting.iscf
         stru_type = vbsetting.stru
         nae, nao = self.active_electron, self.active_orbital

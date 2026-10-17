@@ -39,6 +39,40 @@ def read_xmi_and_orb(
     )
 
 
+def read_xmvb_orbital_matrix(
+    orb_file: str | Path,
+    n_orbitals: int,
+    n_basis: int,
+) -> np.ndarray:
+    """读取 XMVB ``.orb`` 文件并补成 MO x AO 的稠密轨道矩阵。"""
+    lines = Path(orb_file).read_text(errors="ignore").splitlines()
+    tokens = [
+        token
+        for line in lines
+        for token in line.split("#", 1)[0].split()
+    ]
+    orbital_sizes = [int(token) for token in tokens[:n_orbitals]]
+    orbital_tokens = tokens[n_orbitals:]
+    orbital_matrix = np.zeros((n_orbitals, n_basis))
+
+    cursor = 0
+    for orbital_index, orbital_size in enumerate(orbital_sizes):
+        for _ in range(orbital_size):
+            coefficient = float(orbital_tokens[cursor].replace("D", "E"))
+            basis_index = int(orbital_tokens[cursor + 1]) - 1
+            orbital_matrix[orbital_index, basis_index] = coefficient
+            cursor += 2
+
+    logger.info(
+        "Read XMVB ORB header from %s: %s orbitals, %s listed coefficients.",
+        orb_file,
+        len(orbital_sizes),
+        sum(orbital_sizes),
+    )
+    logger.info("Assembled BLW orbital matrix with shape %s.", orbital_matrix.shape)
+    return orbital_matrix
+
+
 class autoVBInputParser:
     '''
     解析输入文件，提取必要的信息，如分子结构、基组、计算参数等

@@ -98,9 +98,9 @@ class VBSettings:
         if self.bond_first and not self.aoa:
             raise ValueError("VBSettings: 'bond_first' is a sub-option of 'aoa', it requires 'aoa' to be set")
 
-        # guess参数可选值：nbo, pnbo, gvb
-        if self.guess not in ("nbo", "pnbo", "gvb"):
-            raise ValueError("VBSettings: 'guess' must be 'nbo', 'pnbo', or 'gvb'")
+        # guess参数可选值：nbo, pnbo, gvb, blw
+        if self.guess not in ("nbo", "pnbo", "gvb", "blw"):
+            raise ValueError("VBSettings: 'guess' must be 'nbo', 'pnbo', 'gvb', or 'blw'")
 
         if self.xmo2svg is not None:
             self.xmo2svg = self.xmo2svg.strip().lower()
@@ -363,6 +363,9 @@ class autoVBMain:
             log_subroutine(f"Entry auto active space selection")
             nae, nao, active_indices = wxp.get_aoi(auto_set=True)
             wxp.split_inactive_active_orbitals(active_indices)
+            if self.input_data.vbsettings.guess == 'blw':
+                logger.info("Using converged BLW orbitals as the final VB initial guess.")
+                wxp.set_initial_guess_orbitals(self.blw_orbital_matrix)
             xmi_path = Path(f"{self.xmi_name}.xmi")
             log_subroutine(f"Entry write .xmi file")
             xmidata = wxp.get_xmidata()
@@ -374,6 +377,25 @@ class autoVBMain:
         passthrough = self.input_data.xmi_passthrough
         write_xmi_file(xmi_path, xmidata, passthrough)
         logger.info(f"Generated XMVB input file {xmi_path} successfully.")
+
+    def generate_blw_to_xmi(self):
+        """使用全部占据 NBO 轨道生成 BLW 初猜计算输入。"""
+        from .io.writers import write_xmi_file
+
+        xmi_path = Path(f"{self.blw_name}.xmi")
+        xmidata = self.wxp.get_xmidata(method_override='blw')
+        xmidata.iscf = 5
+        write_xmi_file(xmi_path, xmidata, self.input_data.xmi_passthrough)
+        logger.info(f"Generated BLW initial-guess input file {xmi_path} successfully with iscf=5.")
+
+    def read_blw_orbitals(self) -> np.ndarray:
+        """读取收敛的 BLW 轨道，并保持原始 NBO 占据轨道顺序。"""
+        from .io.readers import read_xmvb_orbital_matrix
+
+        orb_path = Path(f"{self.blw_name}.orb")
+        n_orbitals = self.wxp.occupation_orbital_matrix.shape[0]
+        n_basis = self.wxp.orbital_matrix.shape[1]
+        return read_xmvb_orbital_matrix(orb_path, n_orbitals, n_basis)
 
     def generate_gvb_to_xmi(self):
         from .gvb.gvb import XMVBGVB
@@ -612,6 +634,17 @@ class autoVBMain:
             self.timed_call("run_formchk", self.run_formchk, self.nbo_gjf_name)
 
         self.wxp = self.read_nbo()
+        if self.input_data.vbsettings.guess == 'blw':
+            if not self.xmvb_exe:
+                raise EnvironmentError("XMVB executable not found in environment. Please install XMVB and ensure 'xmvb' is in your PATH.")
+            log_subroutine("Entry BLW Initial Guess Calculation")
+            logger.info("guess=blw detected; running BLW before the final VB calculation.")
+            self.timed_call("generate_blw_to_xmi", self.generate_blw_to_xmi)
+            self.timed_call("run_xmvb_blw", self.run_xmvb, self.blw_name)
+            self.blw_orbital_matrix = self.timed_call(
+                "read_blw_orbitals", self.read_blw_orbitals
+            )
+
         is_bovb = self.input_data.method.lower() == 'bovb'
         bovb_stream = self._use_bovb_stream()
         if bovb_stream:
@@ -635,6 +668,11 @@ class autoVBMain:
             log_subroutine("Entry XMVB Calculation")
             if not self.xmvb_exe:
                 raise EnvironmentError("XMVB executable not found in environment. Please install XMVB and ensure it is in your PATH.")
+            if self.input_data.vbsettings.guess == 'blw':
+                logger.info(
+                    "Starting final %s calculation with the converged BLW initial guess.",
+                    self.input_data.method.upper(),
+                )
             if bovb_stream:
                 xmo_path = self.run_bovb_stream()
             else:
