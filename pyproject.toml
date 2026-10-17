@@ -25,6 +25,7 @@ draw_xmo = "autoVB.cli.xmo2svg:xmo2svg"
 fch2vb = "autoVB.cli.fch2vb:fch2vb"
 fch2xmi = "autoVB.cli.fch2vb:fch2vb"
 xmo2json = "autoVB.cli.xmo2json:xmo2json"
+xmo2dataset = "autoVB.cli.xmo2dataset:xmo2dataset"
 xmo2xmi = "autoVB.cli.xmo2xmi:xmo2xmi"
 xmo2svg = "autoVB.cli.xmo2svg:xmo2svg"
 
