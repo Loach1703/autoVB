@@ -1,4 +1,5 @@
 import re
+from xml.etree import ElementTree
 
 from rdkit import Chem
 
@@ -6,6 +7,31 @@ from autoVB.draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDraw
 from autoVB.draw_xmo.molecule_bond_variant_drawer import ValenceBondStructureInfo
 from autoVB.draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
 from autoVB.io.xmo_output_parser import XmoParser
+
+
+def test_lowdin_diaeresis_renders_in_single_and_multiline_legends():
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    for legend in ("Löwdin 2 w=0.80000", "CC 2 w=0.10000\nLöwdin 2 w=0.80000"):
+        drawer = rdMolDraw2D.MolDraw2DSVG(520, 390)
+        rendered = legend.replace("ö", "o")
+        drawer.DrawMolecule(Chem.MolFromSmiles("CC"), legend=rendered)
+        drawer.FinishDrawing()
+        svg = MoleculeBondVariantDrawer._increase_multiline_legend_spacing(
+            drawer.GetDrawingText(), rendered, 520, 390
+        )
+        svg = MoleculeBondVariantDrawer._add_legend_diacritics(svg, legend)
+        root = ElementTree.fromstring(svg)
+        marks = [
+            node for node in root.iter()
+            if node.attrib.get("class") == "legend-diacritic"
+        ]
+        assert len(marks) == 1
+        circles = [node for node in marks[0] if node.tag.endswith("circle")]
+        assert len(circles) == 2
+        assert all(float(node.attrib["r"]) > 0 for node in circles)
+        if "\n" in legend:
+            assert marks[0].attrib["transform"].startswith("translate(0,")
 
 
 def write_xmo(tmp_path, text: str):
@@ -230,7 +256,7 @@ Lowdin Weights
 
     assert drawer_input.weight_table == "both"
     assert drawer_input.active_space[0].legend == (
-        "CC 2 w=0.10000\nLowdin 2 w=0.80000"
+        "CC 2 w=0.10000\nLöwdin 2 w=0.80000"
     )
 
 
@@ -437,23 +463,23 @@ H  1.2300 -0.9200 0.0000
 
 def test_legend_font_size_prefers_large_text_and_shrinks_long_legends() -> None:
     short_size = MoleculeBondVariantDrawer._legend_font_size(
-        "Lowdin 2 w=0.07160",
+        "Löwdin 2 w=0.07160",
         520,
         390,
     )
     large_size = MoleculeBondVariantDrawer._legend_font_size(
-        "Lowdin 2 w=0.07160",
+        "Löwdin 2 w=0.07160",
         620,
         460,
     )
     long_size = MoleculeBondVariantDrawer._legend_font_size("x" * 52, 520, 390)
     r24_size = MoleculeBondVariantDrawer._legend_font_size(
-        "Lowdin 1 w=0.03884: 1-6 2-7 4-8 5-9",
+        "Löwdin 1 w=0.03884: 1-6 2-7 4-8 5-9",
         520,
         390,
     )
     multiline_size = MoleculeBondVariantDrawer._legend_font_size(
-        "CC 2 w=0.10961\nLowdin 2 w=0.07160",
+        "CC 2 w=0.10961\nLöwdin 2 w=0.07160",
         520,
         390,
     )

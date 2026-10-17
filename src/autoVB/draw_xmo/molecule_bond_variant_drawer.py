@@ -573,6 +573,9 @@ class MoleculeBondVariantDrawer:
             已完成键高亮、原子编号、电荷和孤对电子标注的 SVG 文本。
         """
         drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
+        # RDKit's glyph renderer treats UTF-8 ö as two unsupported bytes.
+        # Render its base glyph and add the diaeresis as SVG vector dots.
+        rendered_legend = legend.replace("ö", "o")
         draw_options = drawer.drawOptions()
         draw_options.legendFontSize = self._legend_font_size(legend, width, height)
         draw_options.legendFraction = 0.1 * max(len(legend.splitlines()), 1)
@@ -581,12 +584,15 @@ class MoleculeBondVariantDrawer:
                 draw_options.atomLabels[atom.GetIdx()] = atom.GetProp(
                     self.CONDENSED_ATOM_LABEL_PROP
                 )
-        drawer.DrawMolecule(mol, legend=legend)
+        drawer.DrawMolecule(mol, legend=rendered_legend)
         atom_coords = self._atom_draw_coords(drawer, mol)
         drawer.FinishDrawing()
 
         svg = drawer.GetDrawingText()
-        svg = self._increase_multiline_legend_spacing(svg, legend, width, height)
+        svg = self._increase_multiline_legend_spacing(
+            svg, rendered_legend, width, height
+        )
+        svg = self._add_legend_diacritics(svg, legend)
         if self.color_active_space:
             svg = self._color_upgraded_bond_lines_in_svg(
                 svg,
@@ -778,6 +784,51 @@ class MoleculeBondVariantDrawer:
                 min(max_font_size, estimated_size),
             )
         )
+
+    @staticmethod
+    def _add_legend_diacritics(svg: str, legend: str) -> str:
+        """为 Löwdin 的 o 字形补上变音符号，保留 RDKit 图例排版。"""
+        if "ö" not in legend:
+            return svg
+
+        paths = list(
+            re.finditer(r"<path\b(?=[^>]*\bclass='legend')[^>]*/>", svg)
+        )
+        replacements = []
+        for index, character in enumerate(legend.replace("\n", "")):
+            if character != "ö" or index >= len(paths):
+                continue
+            match = paths[index]
+            path = match.group(0)
+            data = re.search(r"\bd='([^']*)'", path)
+            if data is None:
+                continue
+            values = [
+                float(value)
+                for value in re.findall(r"-?\d+(?:\.\d+)?", data.group(1))
+            ]
+            if len(values) < 4:
+                continue
+            xs, ys = values[::2], values[1::2]
+            left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
+            radius = min(right - left, bottom - top) * 0.08
+            y = top - 2.5 * radius
+            transform = re.search(r"\btransform='([^']*)'", path)
+            transform_attr = f" transform='{transform.group(1)}'" if transform else ""
+            dots = (
+                f"<g class='legend-diacritic'{transform_attr}>"
+                "<title>Löwdin</title>"
+                + "".join(
+                    f"<circle cx='{left + fraction * (right - left):.2f}' "
+                    f"cy='{y:.2f}' r='{radius:.2f}' fill='#000000' stroke='none'/>"
+                    for fraction in (0.3, 0.7)
+                )
+                + "</g>"
+            )
+            replacements.append((match.end(), dots))
+        for position, dots in reversed(replacements):
+            svg = svg[:position] + dots + svg[position:]
+        return svg
 
     @classmethod
     def _increase_multiline_legend_spacing(

@@ -391,12 +391,12 @@ class XmoToDrawerInputConverter:
             )
             legend = (
                 f"CC {weight.index} w={cc_weight:.5f}\n"
-                f"Lowdin {weight.index} w={weight.weight:.5f}"
+                f"Löwdin {weight.index} w={weight.weight:.5f}"
             )
         else:
             table_label = {
                 "cc": "CC",
-                "lowdin": "Lowdin",
+                "lowdin": "Löwdin",
                 "inverse": "Inverse",
                 "renormalized": "Renormalized",
             }[self.weight_table]
