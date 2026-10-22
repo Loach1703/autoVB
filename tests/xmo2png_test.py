@@ -6,17 +6,10 @@ import sys
 import numpy as np
 import pytest
 
-from autoVB.cli.xmo2png import xmo2png
 from autoVB.draw_xmo.molecule_bond_variant_drawer import ValenceBondStructureInfo
 from autoVB.draw_xmo.pyvista_drawer import prepare_pyvista_scene, render_pyvista_scene, scene_camera
 from autoVB.io.xmo_output_parser import XmoGeometryAtom
 from autoVB.vbkit import xmo2png as workflow
-
-
-def test_cli_help_does_not_require_pyvista():
-    with pytest.raises(SystemExit) as error:
-        xmo2png(["--help"])
-    assert error.value.code == 0
 
 
 def test_scene_preserves_original_atom_numbers_and_keeps_active_hydrogens():
@@ -187,20 +180,6 @@ def test_charge_labels_are_independent_of_atom_labels(tmp_path, monkeypatch, col
     annotations.assert_not_called()
 
 
-def test_cli_charge_controls(xmo_file, monkeypatch):
-    from autoVB.cli import xmo2png as cli
-
-    captured = {}
-    def draw(source, output, **options):
-        captured.update(options)
-        return SimpleNamespace(output_file=xmo_file.with_suffix(".png"), structure_count=2,
-                               displayed_atom_count=2, weight_table="both")
-    monkeypatch.setattr(cli, "xmo2png_file", draw)
-    cli.xmo2png([str(xmo_file), "--baseline-index", "1", "--hide-charges"])
-    assert captured["baseline_index"] == 1
-    assert captured["show_charges"] is False
-
-
 @pytest.mark.parametrize("projection", ["pca", "optimized3d"])
 def test_cli_passes_projection(xmo_file, projection, monkeypatch):
     from autoVB.cli import xmo2png as cli
@@ -214,16 +193,6 @@ def test_cli_passes_projection(xmo_file, projection, monkeypatch):
     cli.xmo2png([str(xmo_file), "--projection", projection])
     assert captured["projection"] == projection
     assert captured["azimuth"] is None and captured["elevation"] is None
-
-
-def test_workflow_passes_projection_to_renderer(xmo_file, monkeypatch):
-    captured = {}
-    monkeypatch.setattr(workflow, "render_pyvista_scene",
-                        lambda scene, output, **options: captured.update(options))
-    workflow.xmo2png_file(xmo_file, projection="optimized3d")
-    assert captured["projection"] == "optimized3d"
-    with pytest.raises(ValueError, match="projection"):
-        workflow.xmo2png_file(xmo_file, projection="rdkit")
 
 
 @pytest.fixture

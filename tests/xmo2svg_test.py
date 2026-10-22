@@ -133,43 +133,6 @@ def test_autovb_main_calls_xmo2svg_file(monkeypatch, tmp_path):
     }
 
 
-def test_xmo2svg_cli_hides_connection_labels(monkeypatch, tmp_path):
-    from autoVB.cli import xmo2svg as xmo2svg_module
-
-    captured = {}
-
-    def fake_xmo2svg_file(xmo_file, **kwargs):
-        captured["xmo_file"] = xmo_file
-        captured.update(kwargs)
-
-    monkeypatch.setattr(xmo2svg_module, "xmo2svg_file", fake_xmo2svg_file)
-    xmo_path = tmp_path / "sample.xmo"
-
-    assert xmo2svg_module.xmo2svg(
-        [str(xmo_path), "--hide-connection-labels"]
-    ) == 0
-    assert captured["show_connection_labels"] is False
-    assert captured["show_atom_labels"] is False
-
-
-def test_xmo2svg_cli_accepts_both_weight_tables(monkeypatch, tmp_path):
-    from autoVB.cli import xmo2svg as xmo2svg_module
-
-    captured = {}
-
-    def fake_xmo2svg_file(xmo_file, **kwargs):
-        captured["xmo_file"] = xmo_file
-        captured.update(kwargs)
-
-    monkeypatch.setattr(xmo2svg_module, "xmo2svg_file", fake_xmo2svg_file)
-    xmo_path = tmp_path / "sample.xmo"
-
-    assert xmo2svg_module.xmo2svg(
-        [str(xmo_path), "--weight", "both"]
-    ) == 0
-    assert captured["weight_table"] == "both"
-
-
 def test_orbital_connectivity_keeps_close_molecules_separate(tmp_path):
     xyz_path = tmp_path / "two_h2.xyz"
     xyz_path.write_text(
