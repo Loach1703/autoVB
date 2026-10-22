@@ -18,6 +18,13 @@ from ..utils.utils import (
     pyscf_to_xyz,
 )
 from ..io.logging_config import get_logger
+from .active_space import (
+    ActiveSpaceCandidate,
+    TWO_ELECTRON_TYPES,
+    ZERO_ELECTRON_TYPES,
+    nbo_space_contribution,
+    select_fixed_active_space,
+)
 
 if TYPE_CHECKING:
     from ..main import autoVBInputData
@@ -773,29 +780,31 @@ class XMVBNBO:
 
     def get_active_orbital_indices(self, nae: int, nao: int) -> List[int]:
         '''
-        自动获取活性轨道的索引（注意是从0开始计数），根据NBO占据数判断活性轨道，选择NBO占据数小的轨道，并且选择活性轨道数的一半的轨道。
+        从占据 NBO 中选择同时满足 nae/nao 的组合，优先占据数之和较小的组合。
+        nao 按 NBO 连接原子数展开计算；返回零基 NBO 索引，无精确解时抛错。
         Args:
             nae (int): 活性电子数
             nao (int): 活性轨道数
         Returns:
             List[int]: 活性轨道的索引列表
         '''
-        # 根据NBO占据数判断活性轨道，选择最小的half_orb个
-        # 一半的轨道数量
-        half_orb = int(nae / 2)
-
-        not_greater_than_one = self.occupation_numbers <= 1
-        if not np.any(not_greater_than_one):
-            # 如果数组里全都是大于 1 的，则考虑整个数组
-            break_idx = len(self.occupation_numbers)
-        else:
-            break_idx = np.argmax(not_greater_than_one)
-        relevant_values = self.occupation_numbers[:break_idx]
-        # 活性轨道数量
-        actual_half_orb = min(half_orb, len(relevant_values))
-        # 活性轨道索引
-        actorb_indices = np.argsort(relevant_values)[:actual_half_orb]
-        logger.info(f"Automatically selected active orbital indices based on occupation numbers: {actorb_indices}, corresponding occupation numbers: {self.occupation_numbers[actorb_indices]} include atom(s): {get_orbital_atom_contribution(self.orbital_matrix[actorb_indices], self.mol)}")
+        candidates = []
+        for index in self.occ_indices:
+            index = int(index)
+            orbital = self.nbo_parser.nbo_data[index]
+            if orbital.orbital_type not in TWO_ELECTRON_TYPES:
+                continue
+            electrons, orbitals = nbo_space_contribution(
+                orbital.orbital_type, len(orbital.connection),
+            )
+            candidates.append(ActiveSpaceCandidate(
+                index, float(self.occupation_numbers[index]), electrons, orbitals,
+            ))
+        actorb_indices = select_fixed_active_space(candidates, nae, nao, spin=self.mol.spin)
+        logger.info(
+            "Selected exact active space (%s electrons / %s orbitals): NBO indices (0-based) %s, occupancies %s",
+            nae, nao, actorb_indices, self.occupation_numbers[actorb_indices],
+        )
         return actorb_indices
     
     def get_active_orbital_indices_from_active_atoms(self, active_atom:List[int]) -> List[int]:
@@ -948,32 +957,23 @@ class XMVBNBO:
         Returns:
             Tuple[int, int]: 活性电子数, 活性轨道数
         '''
-        nao = 0
-        nae = 0
         nbo_data = self.nbo_parser.nbo_data
-        
-        # 每个BD轨道占据数 > 1 对应 nae + 2， nao + 2
-        # 每个LP轨道占据数 > 1 对应 nae + 2， nao + 1
-        # LP轨道对应1个NAO，BD轨道对应2个NAO，对应的就是 connection 的长度
-
+        # Formal electron contributions are shared with exact-size selection.
         nae = 0
         nao = 0
-
-        two_electron_types = {"BD", "LP", "CR"}
-        zero_electron_types = {"BD*", "LP*", "RY", "RY*"}
 
         for idx in active_indices:
             orbital = nbo_data[idx]
-            if orbital.orbital_type in two_electron_types:
-                nae += 2
-            elif orbital.orbital_type in zero_electron_types:
-                nae += 0
-            else:
+            electrons, orbitals = nbo_space_contribution(
+                orbital.orbital_type, len(orbital.connection),
+            )
+            nae += electrons
+            nao += orbitals
+            if orbital.orbital_type not in TWO_ELECTRON_TYPES | ZERO_ELECTRON_TYPES:
                 logger.debug(
                     f"Unsupported NBO orbital type '{orbital.orbital_type}' "
                     f"for orbital {orbital.index}; cannot determine its active-electron count."
                 )
-            nao += len(orbital.connection)
             if self.input_data.debug:
                 logger.debug(f"AOI orbital index {idx}(spin: {self.mol.spin}): occupancy={nbo_data[idx].occupancy}, connected atoms={nbo_data[idx].connection}, cumulative NAE={nae}, NAO={nao}")
 
