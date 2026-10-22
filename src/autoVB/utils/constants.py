@@ -1,6 +1,6 @@
 import re
 
-VERSION = "0.1.4-dev"
+VERSION = "0.1.5-dev"
 FLOAT_RE = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$')
 BASIS_FUNCTION_DICT = {
     'S': 'S',
