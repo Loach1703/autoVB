@@ -1,4 +1,4 @@
-"""Prepare XMO structures for optional PyVista PNG rendering."""
+"""Prepare XMO structures for optional PyVista PNG/interactive HTML rendering."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +43,8 @@ def xmo2png_file(
         raise ValueError("PyVista projection must be 'pca' or 'optimized3d'")
     source = Path(xmo_file)
     output = Path(output) if output is not None else source.with_name(source.stem + "_3d.png")
-    if output.suffix.lower() != ".png":
-        raise ValueError("PyVista output must use the .png extension")
+    if output.suffix.lower() not in (".png", ".html"):
+        raise ValueError("PyVista output must use the .png or .html extension")
     parsed = XmoParser(source).parse()
     # Reuse SVG structure selection/legends without rewriting XYZ beside the source.
     # Keep geometry indices intact; hydrogen visibility is handled by the 3D scene.

@@ -228,7 +228,7 @@ def render_pyvista_scene(
     azimuth: float | None = None,
     elevation: float | None = None,
 ) -> Path:
-    """Render real spheres/tubes and schematic pairs to a PNG grid.
+    """Render real spheres/tubes and schematic pairs to PNG or interactive HTML.
 
     Gray/element-colored sticks are the $orb framework. Red sticks represent VB
     pairs, lifted slightly off the principal plane for visibility; nonlocal pairs
@@ -239,8 +239,17 @@ def render_pyvista_scene(
     if structures_per_row < 1 or panel_size < 128:
         raise ValueError("structures_per_row must be positive and panel_size must be at least 128")
     output = Path(output)
-    if output.suffix.lower() != ".png":
-        raise ValueError("PyVista output must use the .png extension")
+    html_output = output.suffix.lower() == ".html"
+    if output.suffix.lower() not in (".png", ".html"):
+        raise ValueError("PyVista output must use the .png or .html extension")
+    if html_output:
+        if transparent_background:
+            raise ValueError("transparent_background is only supported for PNG output")
+        try:
+            import trame_pyvista  # noqa: F401 - registers the PyVista HTML exporter
+            import nest_asyncio2  # noqa: F401 - required by synchronous trame export
+        except ImportError as exc:
+            raise ImportError("Interactive HTML requires: pip install 'autoVB[visualization-html]'") from exc
     camera, parallel_scale, normal, tangent = scene_camera(
         scene, azimuth, elevation, projection=projection, show_charges=show_charges,
     )
@@ -261,6 +270,7 @@ def render_pyvista_scene(
                       specular=0.35, specular_power=25)
     visible = set(scene.visible_atoms)
     framework = set(scene.bonds)
+    html_panels = []
 
     def sphere(point, radius, color):
         mesh = pv.Sphere(center=point, radius=radius, theta_resolution=28, phi_resolution=28)
@@ -281,6 +291,26 @@ def render_pyvista_scene(
             if index >= len(scene.structures):
                 continue
             structure = scene.structures[index]
+            if html_output:
+                row, column = divmod(index, columns)
+                labels = []
+                if show_atom_labels:
+                    labels.extend(dict(text=f"{scene.symbols[atom]}{atom + 1}", kind="atom",
+                                       position=(scene.coordinates[atom] + normal * 0.35).tolist())
+                                  for atom in scene.visible_atoms)
+                if show_charges:
+                    labels.extend(dict(text=note.replace("-", "−"), kind="charge",
+                                       position=scene.coordinates[atom].tolist(),
+                                       radius=ATOM_RADII.get(scene.symbols[atom].upper(), 0.26))
+                                  for atom, note in scene.charge_notes[index].items())
+                html_panels.append(dict(rank=index + 1, legend=structure.legend, labels=labels,
+                                        viewport=[column / columns, 1 - (row + 1) / rows,
+                                                  (column + 1) / columns, 1 - row / rows],
+                                        camera=dict(position=np.asarray(camera[0]).tolist(),
+                                                    focalPoint=np.asarray(camera[1]).tolist(),
+                                                    viewUp=np.asarray(camera[2]).tolist(),
+                                                    parallelProjection=True,
+                                                    parallelScale=float(parallel_scale))))
             for a, b in scene.bonds:
                 start, end = scene.coordinates[[a, b]]
                 middle = (start + end) / 2
@@ -343,8 +373,12 @@ def render_pyvista_scene(
             plotter.camera.parallel_scale = parallel_scale
         plotter.enable_anti_aliasing("ssaa")
         output.parent.mkdir(parents=True, exist_ok=True)
-        plotter.screenshot(str(output), transparent_background=transparent_background,
-                           return_img=False)
+        if html_output:
+            from .html_export import export_interactive_html
+            export_interactive_html(plotter, output, html_panels)
+        else:
+            plotter.screenshot(str(output), transparent_background=transparent_background,
+                               return_img=False)
     finally:
         plotter.close()
     return output

@@ -6,10 +6,10 @@ from ..vbkit.xmo2png import xmo2png_file
 
 def xmo2png(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        prog="xmo2png", description="Render XMO VB structures as PyVista 3D ball-and-stick PNGs.",
+        prog="xmo2png", description="Render XMO VB structures as PyVista 3D PNGs or interactive HTML.",
     )
     parser.add_argument("xmo_file", type=Path)
-    parser.add_argument("-o", "--output", type=Path, help="default: <stem>_3d.png")
+    parser.add_argument("-o", "--output", type=Path, help=".png or interactive .html; default: <stem>_3d.png")
     parser.add_argument("-w", "--weight", choices=("both", "lowdin", "cc", "inverse", "renormalized"), default="both")
     parser.add_argument("-m", "--max-structures", type=int, default=3)
     parser.add_argument("-n", "--structures-per-row", type=int, default=3)
@@ -36,7 +36,8 @@ def xmo2png(argv=None) -> int:
         transparent_background=args.transparent_background, projection=args.projection,
         azimuth=args.azimuth, elevation=args.elevation,
     )
-    print(f"PyVista PNG: {result.output_file.resolve()}")
+    output_type = "HTML" if result.output_file.suffix.lower() == ".html" else "PNG"
+    print(f"PyVista {output_type}: {result.output_file.resolve()}")
     print(f"Structures: {result.structure_count}; atoms: {result.displayed_atom_count}; weight: {result.weight_table}")
     return 0
 

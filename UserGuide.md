@@ -464,6 +464,15 @@ xmo2png C6H5NH2_nbo_vb.xmo -m 1 --show-atom-labels --transparent-background -o a
 
 苯胺示例使用既有 `C6H5NH2_nbo_vb.xmo`，实际选择结构 17、20、18。蓝球为 N，深灰球为 C，浅灰球为 H；第三个结构包含跨环配对。
 
+导出可旋转的独立 HTML：
+
+```bash
+pip install -e '.[visualization-html]'
+xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -w both -m 6 -n 3 -o aniline.html
+```
+
+将 HTML 文件用支持 WebGL 的浏览器打开即可旋转、缩放和平移，无需启动 Python 服务或下载外部脚本。使用顶部 `Rank 1`、`Rank 2` 等标签切换结构，每次显示一个结构，并保留各自的旋转和缩放状态；点击 `Reset view` 恢复当前结构的初始视角。HTML 始终使用单结构视图，`-n` 的网格排布仅用于 PNG。结构编号、权重、原子标签和电荷标记由浏览器文字层保留；电荷文字随原子移动并始终面向屏幕。`--hide-charges`、`--show-atom-labels` 同样适用，透明背景选项仅适用于 PNG。
+
 ### 3.9 命令选择建议
 
 - 从分子坐标开始进行完整自动计算：使用 `autovb`。

@@ -282,3 +282,61 @@ def test_optimized_camera_separates_atoms_overlapping_in_default_view():
 
     assert minimum_separation("pca") < 1e-6
     assert minimum_separation("optimized3d") > 0.1
+
+
+def test_html_output_uses_exporter_and_retains_all_annotations(xmo_file, tmp_path, monkeypatch):
+    from autoVB.draw_xmo import html_export
+
+    plotter = Mock()
+    monkeypatch.setitem(sys.modules, "pyvista", SimpleNamespace(
+        Plotter=Mock(return_value=plotter), Sphere=Mock(), Cylinder=Mock(),
+    ))
+    monkeypatch.setitem(sys.modules, "trame_pyvista", Mock())
+    monkeypatch.setitem(sys.modules, "nest_asyncio2", Mock())
+    captured = {}
+    def export(plotter, output, panels):
+        captured.update(panels=panels)
+        output.write_text("<html>interactive</html>")
+    monkeypatch.setattr(html_export, "export_interactive_html", export)
+    output = tmp_path / "interactive.html"
+    result = workflow.xmo2png_file(xmo_file, output=output, max_structures=2,
+                                    baseline_index=1, show_atom_labels=True)
+    assert result.output_file == output and output.exists()
+    panels = captured["panels"]
+    assert len(panels) == 2
+    assert "Löwdin 2" in panels[0]["legend"] and "CC 2" in panels[0]["legend"]
+    assert [label["text"] for label in panels[0]["labels"]] == ["C1", "C2", "−", "+"]
+    assert panels[0]["viewport"] == [0, 0, 0.5, 1]
+    assert panels[1]["viewport"] == [0.5, 0, 1, 1]
+    assert panels[0]["camera"]["parallelProjection"] is True
+    assert panels[0]["camera"]["parallelScale"] > 0
+    plotter.screenshot.assert_not_called()
+    plotter.close.assert_called_once()
+
+
+def test_html_dependency_error_and_transparency_rejection(nonplanar_scene, tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "trame_pyvista", None)
+    with pytest.raises(ImportError, match="visualization-html"):
+        render_pyvista_scene(nonplanar_scene, tmp_path / "missing.html")
+    with pytest.raises(ValueError, match="only supported for PNG"):
+        render_pyvista_scene(nonplanar_scene, tmp_path / "transparent.html", transparent_background=True)
+
+
+def test_html_annotation_payload_preserves_unicode_and_escapes_script(tmp_path):
+    import io
+    import json
+    import re
+    from autoVB.draw_xmo.html_export import export_interactive_html
+
+    plotter = Mock()
+    plotter.trame.export_html.return_value = io.StringIO("<html><body>VTK scene</body></html>")
+    panels = [dict(rank=1, legend="Löwdin </script><script>alert(1)</script>",
+                   viewport=[0, 0, 1, 1], labels=[dict(text="−", kind="charge", position=[0, 0, 0])])]
+    output = tmp_path / "safe.html"
+    export_interactive_html(plotter, output, panels)
+    document = output.read_text()
+    payload = re.search(r'<script id="autovb-panels" type="application/json">(.*?)</script>',document).group(1)
+    assert json.loads(payload) == panels
+    assert "<script>alert(1)</script>" not in document
+    assert '<div class="content" id="autovb-scene"' in document
+    assert "worldToDisplay" in document and "Reset view" in document

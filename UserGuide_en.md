@@ -463,6 +463,15 @@ xmo2png C6H5NH2_nbo_vb.xmo -m 1 --show-atom-labels --transparent-background -o a
 
 The aniline example uses an existing `C6H5NH2_nbo_vb.xmo` and selects structures 17, 20 and 18. N is blue, C dark gray and H light gray; the third structure contains a cross-ring pairing.
 
+Export a standalone, rotatable HTML scene:
+
+```bash
+pip install -e '.[visualization-html]'
+xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -w both -m 6 -n 3 -o aniline.html
+```
+
+Open the HTML in a WebGL-capable browser to rotate, zoom and pan, without a Python service or external script downloads. Use the top `Rank 1`, `Rank 2`, etc. tabs to switch structures in a single view. Each structure retains its own camera state; `Reset view` restores the active structure’s initial camera. HTML always shows one structure at a time; the `-n` grid layout applies only to PNG. A browser overlay retains ranks, weights, atom labels and charge notes; charge text follows its atom while facing the screen. `--hide-charges` and `--show-atom-labels` also apply. Transparent backgrounds are supported only for PNG.
+
 ### 3.9 Command Selection
 
 - Complete workflow from a molecular input: use `autovb`.

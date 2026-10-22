@@ -94,3 +94,6 @@ See [UserGuide.md](UserGuide.md) for input syntax, active-space selection, GVB/B
 For the optional PyVista renderer, install `pip install -e '.[visualization]'`, then run
 `xmo2png C6H5NH2_nbo_vb.xmo -w both -m 3 -n 3`.
 The default output is `C6H5NH2_nbo_vb_3d.png`; a working EGL/OSMesa or desktop OpenGL backend is required even for off-screen rendering.
+
+For an offline interactive HTML, install `pip install -e '.[visualization-html]'` and use
+`xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -m 6 -o aniline.html`.
