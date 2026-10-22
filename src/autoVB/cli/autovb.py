@@ -32,14 +32,13 @@ def build_autovb_parser() -> argparse.ArgumentParser:
 
 
 def normalize_memory(mem: str) -> str:
+    """Expand unit abbreviations without rounding; bare numbers denote MB."""
     if mem.lower().endswith("g"):
         return mem[:-1] + "GB"
     if mem.lower().endswith("m"):
-        mem = int(mem[:-1])
-        return str(int(mem / 1024))  + "GB"
+        return mem[:-1] + "MB"
     if mem.isdigit():
-        return str(int(int(mem) / 1024)) + "GB"
-        # return mem + "MB"
+        return mem + "MB"
     return mem
 
 

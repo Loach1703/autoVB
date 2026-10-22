@@ -379,7 +379,10 @@ def write_automr(
     from ..utils.utils import pyscf_to_xyz
     # automr要求内存至少为nproc的两倍，否则会阻止计算
     need_mem = 2 * int(nproc)
-    if int(mem[:-2]) < need_mem:
+    available_gb = int(mem[:-2])
+    if mem.upper().endswith("MB"):
+        available_gb /= 1024
+    if available_gb < need_mem:
         raise ValueError(f"GVB calculation requires at least {need_mem}GB memory(at least twice the number of processors). Please increase the memory allocation.")
     geometry_text = pyscf_to_xyz(mol)
     gaussian_basis = to_gaussian_basis_name(mol.basis)
