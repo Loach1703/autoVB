@@ -74,6 +74,7 @@ Run `<command> --help` to see all options.
 | `nbo2xmi` | Generate an XMVB `.xmi` input from an NBO `.fch`/`.chk` result. |
 | `fch2vb` / `fch2xmi` | Convert `.fch` orbitals into a minimal XMVB `.xmi` initial guess. |
 | `xmo2svg` / `draw_xmo` | Convert an XMVB `.xmo` output into SVG valence-bond structures. |
+| `xmo2png` | Render VB structures as three-dimensional ball-and-stick PNGs using optional PyVista. |
 | `xmo2json` | Convert an XMVB `.xmo` output into a JSON summary. |
 | `xmo2xmi` | Replace an `.xmi` initial guess with the matching `.orb` file. |
 
@@ -89,3 +90,7 @@ xmo2json C6H6_vb.xmo
 ```
 
 See [UserGuide.md](UserGuide.md) for input syntax, active-space selection, GVB/BOVB workflows, plotting options, and detailed examples.
+
+For the optional PyVista renderer, install `pip install -e '.[visualization]'`, then run
+`xmo2png C6H5NH2_nbo_vb.xmo -w both -m 3 -n 3`.
+The default output is `C6H5NH2_nbo_vb_3d.png`; a working EGL/OSMesa or desktop OpenGL backend is required even for off-screen rendering.

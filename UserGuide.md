@@ -443,7 +443,28 @@ xmo2xmi C6H6_vb.xmi
 xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
 ```
 
-### 3.8 命令选择建议
+### 3.8 `xmo2png`（PyVista 三维图）
+
+可选安装：在源码目录执行 `pip install -e '.[visualization]'`。随后可以用 PyVista 将已有 XMO 中的结构绘制为具有光照和遮挡效果的球棍 PNG，不运行化学计算。
+
+```bash
+xmo2png C6H5NH2_nbo_vb.xmo -w both -m 3 -n 3
+xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -w both -m 3 -n 3
+xmo2png C6H5NH2_nbo_vb.xmo -m 1 --show-atom-labels --transparent-background -o aniline.png
+# 未重新安装命令入口时，也可使用 python -m autoVB.cli.xmo2png ...
+```
+
+- 默认输出 `<原文件名>_3d.png`，前三个结构按 Löwdin 权重排序，每行三个；`-w both` 同时显示 CC/Löwdin。
+- `--projection {pca,optimized3d}` 选择相机方式，默认 `pca`，保留原有 PCA 主平面上的 35° 方位角、55° 仰角。`optimized3d` 参考 SVG 的视角评分搜索方向，减少键压缩、原子/片段重叠、键交叉和电子标记遮挡；兼顾适度倾斜，所有结构共用一个视角。原始三维坐标保持不变。
+- `--panel-size` 设置每格像素边长，默认 640。显式设置 `--azimuth` 或 `--elevation` 时优先使用手动相机并跳过自动搜索；未指定的另一个角度使用 35°/55° 中对应的默认值。
+- 默认显示氢原子；`--hide-hydrogens` 隐藏不参与活性电子配对的氢。`--show-atom-labels` 使用原始 `$geo` 编号，`--show-connection-labels` 显示配对编号。
+- `--baseline-index N` 指定电荷变化的参考结构，默认使用权重最高的结构；`--hide-charges` 可独立隐藏电荷标记，不受原子编号开关影响。多一个电子显示 `−`，少一个电子显示 `+`，两个电子的变化显示 `2−`/`2+`。
+- 保留原始三维坐标，从 `$orb` 单/双中心原子标签构建骨架。红线表示活性电子配对，自配对显示两个红点，未成对电子显示一个红点，跨越骨架的非局域配对使用虚线弧。这些标记是示意，不是轨道等值面；默认显示与 SVG 相同规则的电荷变化标记，表示相对参考结构的电子重新分配，不是绝对形式电荷或部分电荷。
+- 离屏渲染仍需要可用的 OpenGL 后端。无显示节点应配置 EGL 或 OSMesa；可在独立 Conda 环境安装 Mesa 软件渲染库，再运行 Python。图形库的加载路径应在运行环境中设置，不写入 Gaussian/autoVB 的计算配置。
+
+苯胺示例使用既有 `C6H5NH2_nbo_vb.xmo`，实际选择结构 17、20、18。蓝球为 N，深灰球为 C，浅灰球为 H；第三个结构包含跨环配对。
+
+### 3.9 命令选择建议
 
 - 从分子坐标开始进行完整自动计算：使用 `autovb`。
 - 只生成 Gaussian NBO 输入文件：使用 `xyz2nbo`。

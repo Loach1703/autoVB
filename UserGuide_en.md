@@ -442,7 +442,28 @@ xmo2xmi C6H6_vb.xmi
 xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
 ```
 
-### 3.8 Command Selection
+### 3.8 `xmo2png` (PyVista 3D Rendering)
+
+Install the optional renderer from the source directory with `pip install -e '.[visualization]'`. PyVista renders existing XMO structures as shaded ball-and-stick PNGs without running chemical calculations.
+
+```bash
+xmo2png C6H5NH2_nbo_vb.xmo -w both -m 3 -n 3
+xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -w both -m 3 -n 3
+xmo2png C6H5NH2_nbo_vb.xmo -m 1 --show-atom-labels --transparent-background -o aniline.png
+# Without reinstalling the command entry point: python -m autoVB.cli.xmo2png ...
+```
+
+- Output defaults to `<stem>_3d.png`, with three highest-Löwdin-weight structures and three panels per row. `-w both` displays CC and Löwdin weights together.
+- `--projection {pca,optimized3d}` selects the camera mode. The default `pca` retains the original PCA-relative azimuth/elevation of 35°/55°. `optimized3d` searches directions using the SVG geometric score plus sphere/electron-marker occlusion penalties, with a preference for a moderately oblique view. All panels share one camera and the original 3D coordinates remain unchanged.
+- `--panel-size` is the panel width/height in pixels (default 640). Explicit `--azimuth` or `--elevation` overrides automatic search; the other angle defaults to 35° or 55°, respectively.
+- Hydrogens are shown by default; `--hide-hydrogens` hides H atoms outside active pairings. `--show-atom-labels` retains original `$geo` numbering. `--show-connection-labels` displays pairing labels.
+- `--baseline-index N` selects the reference structure for charge changes (the highest-weight structure by default); `--hide-charges` hides the labels independently of atom labels. Excess electrons are marked `−`, missing electrons `+`, with `2−`/`2+` for two-electron changes.
+- Original 3D coordinates are retained. One-/two-center `$orb` labels supply the framework. Red sticks denote active VB pairs; self-pairs use two dots, radicals one dot, and nonlocal pairings dashed arcs. These are schematic marks, not orbital isosurfaces. Charge-change labels are shown by default using the same electron bookkeeping as SVG. They describe redistribution relative to the reference structure, not absolute formal charges or partial charges.
+- Off-screen rendering still requires working OpenGL via desktop graphics, EGL or OSMesa. On a displayless node, software Mesa can be installed in an isolated Conda environment; configure its library paths in the rendering environment rather than Gaussian/autoVB calculation settings.
+
+The aniline example uses an existing `C6H5NH2_nbo_vb.xmo` and selects structures 17, 20 and 18. N is blue, C dark gray and H light gray; the third structure contains a cross-ring pairing.
+
+### 3.9 Command Selection
 
 - Complete workflow from a molecular input: use `autovb`.
 - Generate only a Gaussian NBO input: use `xyz2nbo`.
