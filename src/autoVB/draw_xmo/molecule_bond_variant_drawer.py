@@ -11,6 +11,8 @@ from rdkit import Chem
 from rdkit.Chem import rdDepictor, rdDetermineBonds
 from rdkit.Chem.Draw import rdMolDraw2D
 
+from .electron_distribution import charge_note_from_delta, charge_notes, electron_counts
+
 
 @dataclass
 class ValenceBondStructureInfo:
@@ -1935,29 +1937,11 @@ class MoleculeBondVariantDrawer:
         Returns:
             0-based 原子索引到电荷符号的映射。
         """
-        expected_counts = self._expected_electron_counts()
-
-        actual_counts = {atom_number: 0 for atom_number in expected_counts}
-        for begin_atom, end_atom in valence_bond_structure.bond_pairs:
-            actual_counts.setdefault(begin_atom, 0)
-            actual_counts.setdefault(end_atom, 0)
-            if begin_atom in actual_counts:
-                actual_counts[begin_atom] += 1
-            if end_atom in actual_counts:
-                actual_counts[end_atom] += 1
-        for atom_number in valence_bond_structure.unpaired_atoms:
-            actual_counts[atom_number] = actual_counts.get(atom_number, 0) + 1
-
-        charge_notes: dict[int, str] = {}
-        atom_numbers = sorted(set(expected_counts) | set(actual_counts))
-        for atom_number in atom_numbers:
-            expected_count = expected_counts.get(atom_number, 0)
-            delta = actual_counts.get(atom_number, 0) - expected_count
-            note = self._charge_note_from_delta(delta)
-            if note:
-                charge_notes[atom_number - 1] = note
-
-        return charge_notes
+        return charge_notes(
+            self._expected_electron_counts(),
+            valence_bond_structure.bond_pairs,
+            valence_bond_structure.unpaired_atoms,
+        )
 
     def _neutral_self_pair_counts_from_valence_structure(
         self,
@@ -2003,14 +1987,7 @@ class MoleculeBondVariantDrawer:
         Returns:
             1-based 原子编号到原始电子数的映射。
         """
-        expected_counts: dict[int, int] = {}
-        for atom_group in self.active_bond_atom:
-            for atom_number in atom_group:
-                expected_counts[atom_number] = expected_counts.get(atom_number, 0) + 1
-        for atom_number in self.baseline_unpaired_atoms or []:
-            expected_counts[atom_number] = expected_counts.get(atom_number, 0) + 1
-
-        return expected_counts
+        return electron_counts(self.active_bond_atom, self.baseline_unpaired_atoms or [])
 
     @staticmethod
     def _charge_note_from_delta(delta: int) -> str:
@@ -2022,12 +1999,7 @@ class MoleculeBondVariantDrawer:
         Returns:
             电荷标签文本，例如 `"+"`、`"-"`、`"2+"`；无差异返回空字符串。
         """
-        if delta > 0:
-            return "-" if delta == 1 else f"{delta}-"
-        if delta < 0:
-            missing_count = abs(delta)
-            return "+" if missing_count == 1 else f"{missing_count}+"
-        return ""
+        return charge_note_from_delta(delta)
 
     def _apply_charge_note_props(
         self,
