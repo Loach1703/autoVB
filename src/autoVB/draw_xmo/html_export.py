@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 
 
-def export_interactive_html(plotter, output: Path, panels: list[dict]) -> None:
+def export_interactive_html(plotter, output: Path, panels: list[dict], *, atom_legend: list[dict] | None = None) -> None:
     """Export mesh data plus browser-side labels unsupported by VTK.js serialization."""
     document = plotter.trame.export_html(None).getvalue()
     # Script data must not allow an XMO legend to terminate the script element.
     payload = json.dumps(panels, ensure_ascii=False).replace("<", "\\u003c")
+    atom_payload = json.dumps(atom_legend or [], ensure_ascii=False).replace("<", "\\u003c")
     overlay = r"""
 <style>
 #autovb-tabs {position:fixed;top:0;left:0;right:0;height:52px;box-sizing:border-box;display:flex;gap:6px;align-items:center;padding:6px 8px;overflow-x:auto;background:white;border-bottom:1px solid #ddd;z-index:12;font-family:Arial,sans-serif}
@@ -20,21 +21,41 @@ def export_interactive_html(plotter, output: Path, panels: list[dict]) -> None:
 .autovb-panel {position:absolute;overflow:hidden}
 .autovb-legend {position:absolute;bottom:12px;left:12px;white-space:pre-line;font-size:16px}
 .autovb-label {position:absolute;transform:translate(-50%,-50%);white-space:nowrap;font-size:14px;text-shadow:0 0 3px white,0 0 3px white}
-.autovb-charge {color:#bb1938;font-weight:bold;font-size:21px}
+.autovb-charge {color:#bb1938;font-weight:700;font-size:32px;line-height:1}
+.autovb-charge-circle {display:inline-flex;align-items:center;justify-content:center;border:0.1em solid currentColor;border-radius:50%;box-sizing:border-box}
+#autovb-atom-legend {position:fixed;right:14px;top:66px;z-index:11;display:flex;flex-wrap:wrap;align-items:center;gap:12px;max-width:calc(100vw - 56px);padding:10px 12px;border:1px solid #e3e6ea;border-radius:6px;background:#fffffff0;font:14px Arial,sans-serif;color:#333;pointer-events:none}
+#autovb-atom-legend[hidden] {display:none}
+.autovb-atom-key {display:inline-flex;align-items:center;gap:6px}
+.autovb-atom-swatch {width:13px;height:13px;border-radius:50%;border:1px solid #8a9199;box-sizing:border-box}
 #autovb-help {position:fixed;bottom:0;left:0;right:0;height:32px;box-sizing:border-box;padding:3px 8px;z-index:11;background:#ffffffdf;font:12px Arial,sans-serif;display:flex;gap:16px;align-items:center}
 #autovb-help button {cursor:pointer;flex:none}
 #autovb-status {white-space:nowrap}
 </style>
 <div id="autovb-tabs" role="tablist" aria-label="VB structures"></div>
 <div id="autovb-overlay"></div>
+<div id="autovb-atom-legend" aria-label="Atom colors" hidden></div>
 <div id="autovb-help"><span>Drag: rotate · Wheel: zoom · Shift+drag: pan</span><button id="autovb-reset" type="button">Reset view</button><span id="autovb-status">Loading 3D scene…</span></div>
 <script id="autovb-panels" type="application/json">__PANELS__</script>
+<script id="autovb-atom-colors" type="application/json">__ATOM_COLORS__</script>
 <script>
 (() => {
   const panels = JSON.parse(document.getElementById('autovb-panels').textContent);
   const overlay = document.getElementById('autovb-overlay');
   const tabs = document.getElementById('autovb-tabs');
   const status = document.getElementById('autovb-status');
+  const atomColors = JSON.parse(document.getElementById('autovb-atom-colors').textContent);
+  const atomLegend = document.getElementById('autovb-atom-legend');
+  if (atomColors.length) {
+    const title = document.createElement('strong'); title.textContent = 'Atoms'; atomLegend.append(title);
+    atomColors.forEach(entry => {
+      const item = document.createElement('span'); item.className = 'autovb-atom-key';
+      const swatch = document.createElement('span'); swatch.className = 'autovb-atom-swatch';
+      swatch.style.backgroundColor = entry.color;
+      const text = document.createElement('span'); text.textContent = entry.symbol;
+      item.append(swatch, text); atomLegend.append(item);
+    });
+    atomLegend.hidden = false;
+  }
   let ready = false;
   let activeIndex = 0;
   const entries = panels.map((panel, index) => {
@@ -63,6 +84,11 @@ def export_interactive_html(plotter, output: Path, panels: list[dict]) -> None:
       const text = document.createElement('div');
       text.className = 'autovb-label' + (label.kind === 'charge' ? ' autovb-charge' : '');
       text.textContent = label.text; element.append(text);
+      if (label.color) text.style.color = label.color;
+      if (label.kind === 'charge' && label.circle) {
+        text.classList.add('autovb-charge-circle');
+        text.style.width = text.style.height = Math.max(1.5, label.text.length * 0.75 + 0.3) + 'em';
+      }
       return {...label, element: text};
     });
     return {...panel, element, tab, labels, renderer: null, initial: null};
@@ -130,7 +156,9 @@ def export_interactive_html(plotter, output: Path, panels: list[dict]) -> None:
             const up = entry.renderer.getActiveCamera().getViewUp();
             const edge = label.position.map((value, i) => value + up[i] * (label.radius ?? 0.26));
             const edgeY = view.worldToDisplay(...edge, entry.renderer)[1];
-            const gap = Math.abs(edgeY - y) * box.height / height + 12;
+            const labelBox = label.element.getBoundingClientRect();
+            const labelRadius = label.circle ? labelBox.width / 2 : labelBox.height / 2;
+            const gap = Math.abs(edgeY - y) * box.height / height + labelRadius + 8;
             offset = [0.65 * gap, -0.8 * gap];
           }
           const px = x * box.width / width + offset[0];
@@ -145,7 +173,7 @@ def export_interactive_html(plotter, output: Path, panels: list[dict]) -> None:
   requestAnimationFrame(update);
 })();
 </script>
-""".replace("__PANELS__", payload)
+""".replace("__ATOM_COLORS__", atom_payload).replace("__PANELS__", payload)
     document = document.replace("<title>VTK.js | Example - OfflineLocalView</title>",
                                 "<title>autoVB · Interactive VB structures</title>")
     # The offline viewer clears its root container during startup. Keep the scene

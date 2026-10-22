@@ -1,5 +1,6 @@
 import re
 from xml.etree import ElementTree
+import pytest
 
 from rdkit import Chem
 
@@ -316,8 +317,8 @@ def test_charge_label_avoids_svg_atom_bbox_at_right_edge(tmp_path):
     charge_position = (float(charge_match.group(1)), float(charge_match.group(2)))
     charge_bbox = drawer._text_bbox(
         charge_position,
-        26.4 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
-        26.4,
+        39.6 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        39.6,
     )
     assert not drawer._bbox_collides(charge_bbox, [(80.0, 35.0, 98.0, 65.0)])
 
@@ -354,10 +355,35 @@ def test_charge_label_avoids_svg_bond_bbox(tmp_path):
     charge_position = (float(charge_match.group(1)), float(charge_match.group(2)))
     charge_bbox = drawer._text_bbox(
         charge_position,
-        2 * 26.4 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
-        26.4,
+        2 * 39.6 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        39.6,
     )
     assert not drawer._bbox_collides(charge_bbox, drawer._svg_bond_bboxes(svg))
+
+
+@pytest.mark.parametrize("circle", [False, True])
+def test_svg_charge_text_and_optional_circles(tmp_path, circle):
+    drawer = MoleculeBondVariantDrawer(
+        xyz_file=tmp_path / "unused.xyz", output_dir=tmp_path,
+        active_bond_atom=[], active_space=[], show_atom_labels=False,
+        circle_charges=circle,
+    )
+    root = ElementTree.fromstring(drawer._add_svg_annotations(
+        "<svg></svg>", atom_coords=[(5, 5), (495, 375)],
+        charge_notes={0: "2-", 1: "+"}, lone_pair_counts={}, radical_counts={},
+        width=520, height=390,
+    ))
+    labels = root.findall(".//text")
+    assert [label.text for label in labels] == ["2−", "+"]
+    assert all(label.attrib["font-weight"] == "700" for label in labels)
+    assert all(label.attrib["font-size"] == "39.6px" for label in labels)
+    rings = root.findall(".//circle")
+    assert len(rings) == (2 if circle else 0)
+    for ring, label in zip(rings, labels):
+        x, y, radius = (float(ring.attrib[key]) for key in ("cx", "cy", "r"))
+        assert (x, y) == (float(label.attrib["x"]), float(label.attrib["y"]))
+        assert 0 <= x - radius and x + radius <= 520
+        assert 0 <= y - radius and y + radius <= 390
 
 
 def test_unpaired_electron_movement_does_not_create_charge_notes(tmp_path):

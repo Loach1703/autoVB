@@ -149,7 +149,7 @@ def test_xmo2svg_cli_hides_connection_labels(monkeypatch, tmp_path):
         [str(xmo_path), "--hide-connection-labels"]
     ) == 0
     assert captured["show_connection_labels"] is False
-    assert captured["show_atom_labels"] is True
+    assert captured["show_atom_labels"] is False
 
 
 def test_xmo2svg_cli_accepts_both_weight_tables(monkeypatch, tmp_path):

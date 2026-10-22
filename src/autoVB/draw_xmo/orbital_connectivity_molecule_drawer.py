@@ -43,6 +43,10 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
         structures_per_row: int = 2,
         projection: str = "rdkit",
         condense_hydrogens: bool = True,
+        show_charges: bool = True,
+        circle_charges: bool = False,
+        transparent_background: bool = False,
+        panel_size: int | None = None,
     ) -> None:
         super().__init__(
             xyz_file=xyz_file,
@@ -64,6 +68,10 @@ class OrbitalConnectivityMoleculeDrawer(MoleculeBondVariantDrawer):
             lone_pair_dot_radius=lone_pair_dot_radius,
             write_individual_svgs=write_individual_svgs,
             structures_per_row=structures_per_row,
+            show_charges=show_charges,
+            circle_charges=circle_charges,
+            transparent_background=transparent_background,
+            panel_size=panel_size,
         )
         self.orbital_atom_rows = self._copy_atom_groups(orbital_atom_rows)
         self.layout_bond_pairs = (

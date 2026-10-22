@@ -12,6 +12,7 @@ from rdkit.Chem import rdDepictor, rdDetermineBonds
 from rdkit.Chem.Draw import rdMolDraw2D
 
 from .electron_distribution import charge_note_from_delta, charge_notes, electron_counts
+from .charge_annotations import CHARGE_STROKE_RATIO
 
 
 @dataclass
@@ -72,7 +73,7 @@ class MoleculeBondVariantDrawer:
     DEFAULT_CHARGE_NOTE_SCALE = 1.2
     DEFAULT_ATOM_LABEL_COLOR = "#000000"
     DEFAULT_ATOM_LABEL_FONT_SIZE = 12.0
-    DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 22.0
+    DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 33.0
     DEFAULT_LEGEND_MIN_FONT_SIZE = 16
     DEFAULT_LEGEND_MAX_FONT_SIZE = 40
     DEFAULT_LEGEND_LINE_GAP = 6.0
@@ -128,6 +129,10 @@ class MoleculeBondVariantDrawer:
         lone_pair_dot_radius: float | None = None,
         write_individual_svgs: bool = False,
         structures_per_row: int = 2,
+        show_charges: bool = True,
+        circle_charges: bool = False,
+        transparent_background: bool = False,
+        panel_size: int | None = None,
     ) -> None:
         """初始化绘图器。
 
@@ -196,6 +201,10 @@ class MoleculeBondVariantDrawer:
         )
         self.write_individual_svgs = write_individual_svgs
         self.structures_per_row = structures_per_row
+        self.show_charges = show_charges
+        self.circle_charges = circle_charges
+        self.transparent_background = transparent_background
+        self.panel_size = panel_size
 
     @staticmethod
     def _copy_atom_groups(atom_groups: Sequence[Sequence[int]]) -> list[list[int]]:
@@ -487,7 +496,8 @@ class MoleculeBondVariantDrawer:
         Returns:
             SVG 文本。
         """
-        return self._draw_molecule_svg(mol, legend, upgraded_bond_counts, 620, 460)
+        width, height = (self.panel_size, self.panel_size) if self.panel_size else (620, 460)
+        return self._draw_molecule_svg(mol, legend, upgraded_bond_counts, width, height)
 
     def draw_grid_svg(
         self,
@@ -505,8 +515,8 @@ class MoleculeBondVariantDrawer:
         Returns:
             包含所有子图的 SVG 文本。
         """
-        sub_img_width = 520
-        sub_img_height = 390
+        sub_img_width = self.panel_size or 520
+        sub_img_height = self.panel_size or 390
         # 左右间距
         column_gap = 100
         mols_per_row = self.structures_per_row
@@ -518,7 +528,7 @@ class MoleculeBondVariantDrawer:
         grid_height = sub_img_height * row_count
 
         parts = [
-            "<?xml version='1.0' encoding='iso-8859-1'?>\n",
+            "<?xml version='1.0' encoding='UTF-8'?>\n",
             "<svg version='1.1' baseProfile='full'\n",
             "              xmlns='http://www.w3.org/2000/svg'\n",
             "                      xmlns:rdkit='http://www.rdkit.org/xml'\n",
@@ -530,6 +540,7 @@ class MoleculeBondVariantDrawer:
             (
                 "<rect style='opacity:1.0;fill:#FFFFFF;stroke:none' "
                 "width='100%' height='100%' x='0' y='0'> </rect>\n"
+                if not self.transparent_background else ""
             ),
         ]
 
@@ -579,6 +590,7 @@ class MoleculeBondVariantDrawer:
         # Render its base glyph and add the diaeresis as SVG vector dots.
         rendered_legend = legend.replace("ö", "o")
         draw_options = drawer.drawOptions()
+        draw_options.clearBackground = not self.transparent_background
         draw_options.legendFontSize = self._legend_font_size(legend, width, height)
         draw_options.legendFraction = 0.1 * max(len(legend.splitlines()), 1)
         for atom in mol.GetAtoms():
@@ -590,7 +602,7 @@ class MoleculeBondVariantDrawer:
         atom_coords = self._atom_draw_coords(drawer, mol)
         drawer.FinishDrawing()
 
-        svg = drawer.GetDrawingText()
+        svg = drawer.GetDrawingText().replace("encoding='iso-8859-1'", "encoding='UTF-8'")
         svg = self._increase_multiline_legend_spacing(
             svg, rendered_legend, width, height
         )
@@ -748,10 +760,19 @@ class MoleculeBondVariantDrawer:
                 charge_label_bboxes,
             )
             charge_label_bboxes.append(charge_bbox)
+            if self.circle_charges:
+                x_pos, y_pos = charge_position
+                stroke_width = charge_font_size * CHARGE_STROKE_RATIO
+                radius = (charge_bbox[2] - charge_bbox[0] - stroke_width) / 2
+                annotation_parts.append(
+                    f"<circle class='charge-circle atom-{atom_idx}' "
+                    f"cx='{x_pos:.1f}' cy='{y_pos:.1f}' r='{radius:.1f}' "
+                    f"fill='none' stroke='{self.active_space_color}' stroke-width='{stroke_width:.2f}'/>\n"
+                )
             annotation_parts.append(
                 self._svg_text_label(
                     css_class=f"charge-label atom-{atom_idx}",
-                    text=note,
+                    text=note.replace("-", "−"),
                     position=charge_position,
                     color=self.active_space_color,
                     font_size=charge_font_size,
@@ -1280,6 +1301,8 @@ class MoleculeBondVariantDrawer:
             len(note) * font_size * self.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
         )
         text_height = font_size
+        if self.circle_charges:
+            text_width = text_height = max(text_width, text_height) + 0.3 * font_size
         obstacles = list(svg_obstacle_bboxes) + list(charge_bboxes)
         preferred_position = self._label_position(
             atom_coord,
@@ -1289,6 +1312,10 @@ class MoleculeBondVariantDrawer:
             width,
             height,
         )
+        if self.circle_charges:
+            preferred_position = self._bounded_text_position(
+                *preferred_position, text_width, text_height, width, height,
+            )
         preferred_bbox = self._text_bbox(
             preferred_position,
             text_width,
@@ -2019,7 +2046,7 @@ class MoleculeBondVariantDrawer:
             atom_idx = atom.GetIdx()
             if atom.HasProp(self.CHARGE_NOTE_PROP):
                 atom.ClearProp(self.CHARGE_NOTE_PROP)
-            if atom_idx in charge_notes:
+            if self.show_charges and atom_idx in charge_notes:
                 atom.SetProp(self.CHARGE_NOTE_PROP, charge_notes[atom_idx])
 
     def _apply_lone_pair_count_props(

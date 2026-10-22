@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ..draw_xmo.pyvista_drawer import prepare_pyvista_scene, render_pyvista_scene
+from ..draw_xmo.pyvista_drawer import COLOR_SCHEMES, prepare_pyvista_scene, render_pyvista_scene
 from ..draw_xmo.electron_distribution import electron_counts
 from ..draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
 from ..io.xmo_output_parser import XmoParser
@@ -23,13 +23,18 @@ def xmo2png_file(
     output: str | Path | None = None,
     *,
     weight_table: str = "both",
-    max_structures: int = 3,
+    max_structures: int | None = 3,
     structures_per_row: int = 3,
     panel_size: int = 640,
     show_hydrogens: bool = True,
     show_atom_labels: bool = False,
     show_connection_labels: bool = False,
     show_charges: bool = True,
+    circle_charges: bool = False,
+    show_lone_pairs: bool = True,
+    color_scheme: str = "element",
+    show_legend: bool = True,
+    indices: list[int] | None = None,
     baseline_index: int | None = None,
     transparent_background: bool = False,
     projection: str = "pca",
@@ -37,10 +42,12 @@ def xmo2png_file(
     elevation: float | None = None,
 ) -> Xmo2PngResult:
     """Draw the highest-weight structures at the original geometry; no calculations."""
-    if max_structures <= 0 or structures_per_row <= 0 or panel_size < 128:
+    if (max_structures is not None and max_structures <= 0) or structures_per_row <= 0 or panel_size < 128:
         raise ValueError("Structure counts must be positive and panel_size must be at least 128")
     if projection not in ("pca", "optimized3d"):
         raise ValueError("PyVista projection must be 'pca' or 'optimized3d'")
+    if color_scheme not in COLOR_SCHEMES:
+        raise ValueError("color_scheme must be 'element' or 'highlight'")
     source = Path(xmo_file)
     output = Path(output) if output is not None else source.with_name(source.stem + "_3d.png")
     if output.suffix.lower() not in (".png", ".html"):
@@ -53,6 +60,7 @@ def xmo2png_file(
             parsed, directory, hide_hydrogens=False, max_structures=max_structures,
             weight_table=weight_table, show_connection_labels=show_connection_labels,
             baseline_index=baseline_index,
+            indices=indices,
         )
         drawer_input = converter.convert()
     scene = prepare_pyvista_scene(
@@ -64,6 +72,10 @@ def xmo2png_file(
         scene, output, structures_per_row=structures_per_row, panel_size=panel_size,
         show_atom_labels=show_atom_labels, transparent_background=transparent_background,
         show_charges=show_charges,
+        circle_charges=circle_charges,
+        show_lone_pairs=show_lone_pairs,
+        color_scheme=color_scheme,
+        show_legend=show_legend,
         projection=projection, azimuth=azimuth, elevation=elevation,
     )
     return Xmo2PngResult(output, len(scene.structures), len(scene.visible_atoms), drawer_input.weight_table)

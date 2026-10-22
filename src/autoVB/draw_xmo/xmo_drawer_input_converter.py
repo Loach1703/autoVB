@@ -45,6 +45,7 @@ class XmoToDrawerInputConverter:
         baseline_index: int | None = None,
         weight_table: str = "cc",
         show_connection_labels: bool = True,
+        indices: list[int] | None = None,
     ) -> None:
         """初始化 XMO 到绘图输入的转换器。
 
@@ -66,6 +67,7 @@ class XmoToDrawerInputConverter:
         self.baseline_index = baseline_index
         self.weight_table = self._normalize_weight_table(weight_table)
         self.show_connection_labels = show_connection_labels
+        self.indices = indices
 
     def convert(self) -> XmoDrawerInput:
         """执行转换，得到绘图器可直接使用的数据。
@@ -208,8 +210,12 @@ class XmoToDrawerInputConverter:
             权重行列表；如果设置了 `max_structures`，则按权重从大到小排序后返回前 N 个。
         """
         weights = self._weights()
-        if self.max_structures is None:
-            return list(weights)
+        if self.indices is not None:
+            by_index = {weight.index: weight for weight in weights}
+            missing = [index for index in self.indices if index not in by_index]
+            if missing:
+                raise ValueError(f"Cannot find {self.weight_table} structure indices: {missing}")
+            return [by_index[index] for index in self.indices]
         return sorted(
             weights,
             key=lambda weight: (-weight.weight, weight.index),

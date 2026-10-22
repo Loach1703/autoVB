@@ -342,39 +342,73 @@ nbo2xmi C6H6.fch 6-31g* -nae 6 -nao 6
 nbo2xmi C6H6.fch 6-31g* -aoa 1 3 5 7 9 11
 ```
 
-### 3.4 `xmo2svg`
+### 3.4 `xmoview` (Unified Drawing Command)
 
-`xmo2svg` reads an XMVB `.xmo` output and generates SVG valence-bond structure images. Use `--connectivity` to select the connectivity source: `$orb` labels are used by default, while `rdkit` uses RDKit bond perception.
-
-```bash
-xmo2svg <xmo-file> [--connectivity {orb,rdkit}] [options]
-```
-
-Arguments:
-
-- `--connectivity {orb,rdkit}`: Connectivity source, default `orb`. `orb` uses `$orb` labels and `rdkit` uses RDKit bond perception.
-- `-w`/`--weight {lowdin,cc,inverse,renormalized,both}`: Weight table used for display and ordering, default `lowdin`; `both` displays CC and Lowdin weights together.
-- `-m`/`--max-structures {N,all}`: Maximum number of structures to draw, default `20`; use `all` to draw every structure.
-- `--baseline-index N`: Baseline structure index, defaulting to the highest-weight structure.
-- `--charge CHARGE`: Total charge used by RDKit for bond-order perception, default `0`.
-- `--projection {rdkit,pca,optimized3d,contact}`: Atom layout method, default `rdkit`.
-- `--show-hydrogens`: Show hydrogen atoms; hidden by default.
-- `--no-condensed-hydrogens`: Disable compact hydrogen labels for heteroatoms or isolated carbon atoms.
-- `--write-individual-svgs`: Write one SVG for each structure in addition to the grid SVG.
-- `-n`/`--structures-per-row N`: Number of structures per grid row, default `2`.
-- `--hide-atom-labels`: Hide atom-number labels.
-- `--hide-connection-labels`: Hide bonded-atom and radical labels after each structure weight.
-- `--hide-lone-pairs`: Hide lone-pair markers.
-
-Examples:
+`xmoview` reads existing XMVB `.xmo` files and exports 2D SVG, 3D PNG or standalone interactive HTML without running chemical calculations.
 
 ```bash
-xmo2svg C6H6_vb.xmo --connectivity rdkit
-xmo2svg R24_vb.xmo --projection optimized3d --weight both
-xmo2svg mens_vb.xmo --projection contact --hide-connection-labels
+xmoview molecule.xmo                         # molecule.svg
+xmoview molecule.xmo -f png                  # molecule.png
+xmo2html molecule.xmo                        # molecule.html; equivalent to xmoview molecule.xmo -f html
+xmoview molecule.xmo -o figures/result.svg   # custom path; infer format from extension
 ```
 
-`draw_xmo` is an alias for `xmo2svg` and accepts the same arguments.
+`draw_xmo` and `xmo2svg` are aliases for the same command. `xmo2png` uses the same command with PNG as its default format. `xmo2html` defaults to HTML, equivalent to `xmoview -f html`. All entry points accept the same options. An output extension selects the format; conflicting `-f` and `-o` values are rejected.
+
+**Common options:**
+
+| Option | Behavior and default |
+| --- | --- |
+| `-f, --format {svg,png,html}` | Output format; inferred from `-o` when omitted |
+| `-o, --output PATH` | Custom output path; otherwise replace the input extension |
+| `-m, --max-structures N/all` | Top 6 structures by default; `all` sorts and displays every structure |
+| `--indices 12,35,80` | Original XMO structure indices in the supplied order; mutually exclusive with explicit `-m` |
+| `-w, --weight {both,lowdin,cc,inverse,renormalized}` | Default `both`: rank by Lowdin and display both CC and Lowdin weights |
+| `--baseline-index N` | Reference structure for charge changes; highest weight in the selected table by default, independent of displayed order |
+| `-n, --structures-per-row N` | SVG/PNG grid columns, default 3; not applicable to HTML |
+| `--panel-size N` | SVG/PNG panel side length, minimum 128; SVG retains native rectangular dimensions by default, PNG defaults to 640 pixels |
+| `--show-hydrogens / --hide-hydrogens` | SVG hides ordinary H by default; PNG/HTML show all H by default. Explicit flags override these defaults; active H remains visible (SVG retains all H if active H requires the full atom mapping) |
+| `--show-atom-labels` | Original geometry atom numbers, hidden by default |
+| `--show-connection-labels` | Pair/radical atom numbers in legends, hidden by default |
+| `--hide-lone-pairs` | Hide active lone-pair dots (shown by default); these do not represent all inactive lone pairs |
+| `--hide-charges` | Hide charge changes relative to the reference (shown by default); not absolute formal or partial charges |
+| `--circle-charges` | Draw an outline circle around each complete charge label, including `2−`; off by default, supported for SVG/PNG/HTML |
+| `--transparent-background` | Transparent SVG/PNG background; not applicable to HTML |
+
+Charge-change labels use the full minus sign `−`, are bold and approximately 50% larger than before. `--circle-charges` affects charge annotations only; `--hide-charges` suppresses both text and circles.
+
+**SVG-only options:**
+
+- `--connectivity {orb,rdkit}`: defaults to `$orb` atom labels; `rdkit` perceives bonds from geometry.
+- `--charge N`: total charge for bond-order perception, default 0; independent of charge-label visibility.
+- `--layout {rdkit,pca,optimized3d,contact}`: defaults to `rdkit`; alternatives use PCA, optimized 3D projection or fragment-contact layout. Currently `--connectivity rdkit` requires `--layout rdkit`; unsupported combinations are rejected.
+- `--condense-hydrogens / --no-condense-hydrogens`: compact NH2 etc. labels, enabled by default. The old `--no-condensed-hydrogens` spelling is retained.
+- `--write-individual`: also write each structure as an SVG; the old `--write-individual-svgs` spelling is retained.
+
+**PNG/HTML-only options:**
+
+- `--view {pca,optimized3d}`: initial camera selection, default `optimized3d`; original 3D coordinates are preserved.
+- `--color-scheme {element,highlight}`: defaults to `element`, preserving the original element colors. `highlight` uses a light-gray framework (`#C8CDD3`) and bright-red active pair lines/arcs, lone-pair/radical dots and charge-change labels (`#FF3030`). Atom spheres retain element colors; geometry and line widths are unchanged. Supported for PNG/HTML through every command alias.
+
+- `--azimuth`, `--elevation`: manual camera angles override automatic search; the other angle defaults to 35/55 degrees respectively.
+- `--hide-legend`: hide the atom-color key (shown by default), while retaining structure weights. PNG appends one shared key below the grid; HTML shows it in the upper-right corner. Only visible elements are listed, with colors matching the atom spheres. Hidden H is omitted; retained active H is included. The key describes atoms only, without bond/electron/charge entries. SVG does not generate an atom-color legend.
+
+```bash
+xmo2png molecule.xmo --color-scheme highlight
+xmo2html molecule.xmo --color-scheme highlight
+```
+
+
+The compatibility option `--projection` maps to `--layout` for SVG and `--view` for PNG/HTML. Conflicting values and explicitly inapplicable options are rejected, e.g. `--charge` with PNG or `-n` with HTML.
+
+```bash
+xmoview R24_vb.xmo --layout optimized3d
+xmoview mens_vb.xmo --layout contact
+xmoview molecule.xmo -f png --view optimized3d
+xmoview molecule.xmo -f html --indices 12,35
+```
+
+CLI defaults are now shared: top 6 structures, both weights, 3 panels per row, and hidden atom/connection labels. SVG hides ordinary H by default; PNG/HTML show all H by default. The old SVG defaults (20 structures, Lowdin only and visible labels) must be requested explicitly. PNG filenames no longer receive an automatic `_3d` suffix. The `.autovb` workflow settings `xmo2svg`/`draw_xmo` are unchanged.
 
 ### 3.5 `fch2vb`
 
@@ -442,21 +476,21 @@ xmo2xmi C6H6_vb.xmi
 xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
 ```
 
-### 3.8 `xmo2png` (PyVista 3D Rendering)
+### 3.8 `xmoview -f png/html` (PyVista 3D Rendering)
 
 Install the optional renderer from the source directory with `pip install -e '.[visualization]'`. PyVista renders existing XMO structures as shaded ball-and-stick PNGs without running chemical calculations.
 
 ```bash
-xmo2png C6H5NH2_nbo_vb.xmo -w both -m 3 -n 3
-xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -w both -m 3 -n 3
-xmo2png C6H5NH2_nbo_vb.xmo -m 1 --show-atom-labels --transparent-background -o aniline.png
-# Without reinstalling the command entry point: python -m autoVB.cli.xmo2png ...
+xmoview C6H5NH2_nbo_vb.xmo -f png -w both -m 3 -n 3
+xmoview C6H5NH2_nbo_vb.xmo -f png --view optimized3d -w both -m 3 -n 3
+xmoview C6H5NH2_nbo_vb.xmo -f png -m 1 --show-atom-labels --transparent-background -o aniline.png
+# Without reinstalling the command entry point: python -m autoVB.cli.xmoview ...
 ```
 
-- Output defaults to `<stem>_3d.png`, with three highest-Löwdin-weight structures and three panels per row. `-w both` displays CC and Löwdin weights together.
-- `--projection {pca,optimized3d}` selects the camera mode. The default `pca` retains the original PCA-relative azimuth/elevation of 35°/55°. `optimized3d` searches directions using the SVG geometric score plus sphere/electron-marker occlusion penalties, with a preference for a moderately oblique view. All panels share one camera and the original 3D coordinates remain unchanged.
+- Output defaults to `<stem>.png`, with six highest-Löwdin-weight structures and three panels per row. `-w both` displays CC and Löwdin weights together.
+- `--view {pca,optimized3d}` selects the camera mode. The default is `optimized3d`. Explicit `pca` uses the PCA-relative azimuth/elevation of 35°/55°. `optimized3d` searches directions using the SVG geometric score plus sphere/electron-marker occlusion penalties, with a preference for a moderately oblique view. All panels share one camera and the original 3D coordinates remain unchanged.
 - `--panel-size` is the panel width/height in pixels (default 640). Explicit `--azimuth` or `--elevation` overrides automatic search; the other angle defaults to 35° or 55°, respectively.
-- Hydrogens are shown by default; `--hide-hydrogens` hides H atoms outside active pairings. `--show-atom-labels` retains original `$geo` numbering. `--show-connection-labels` displays pairing labels.
+- All hydrogens are shown by default; `--hide-hydrogens` hides ordinary H while retaining active H; `--show-atom-labels` retains original `$geo` numbering. `--show-connection-labels` displays pairing labels.
 - `--baseline-index N` selects the reference structure for charge changes (the highest-weight structure by default); `--hide-charges` hides the labels independently of atom labels. Excess electrons are marked `−`, missing electrons `+`, with `2−`/`2+` for two-electron changes.
 - Original 3D coordinates are retained. One-/two-center `$orb` labels supply the framework. Red sticks denote active VB pairs; self-pairs use two dots, radicals one dot, and nonlocal pairings dashed arcs. These are schematic marks, not orbital isosurfaces. Charge-change labels are shown by default using the same electron bookkeeping as SVG. They describe redistribution relative to the reference structure, not absolute formal charges or partial charges.
 - Off-screen rendering still requires working OpenGL via desktop graphics, EGL or OSMesa. On a displayless node, software Mesa can be installed in an isolated Conda environment; configure its library paths in the rendering environment rather than Gaussian/autoVB calculation settings.
@@ -467,10 +501,10 @@ Export a standalone, rotatable HTML scene:
 
 ```bash
 pip install -e '.[visualization-html]'
-xmo2png C6H5NH2_nbo_vb.xmo --projection optimized3d -w both -m 6 -n 3 -o aniline.html
+xmoview C6H5NH2_nbo_vb.xmo -f html --view optimized3d -w both -m 6 -o aniline.html
 ```
 
-Open the HTML in a WebGL-capable browser to rotate, zoom and pan, without a Python service or external script downloads. Use the top `Rank 1`, `Rank 2`, etc. tabs to switch structures in a single view. Each structure retains its own camera state; `Reset view` restores the active structure’s initial camera. HTML always shows one structure at a time; the `-n` grid layout applies only to PNG. A browser overlay retains ranks, weights, atom labels and charge notes; charge text follows its atom while facing the screen. `--hide-charges` and `--show-atom-labels` also apply. Transparent backgrounds are supported only for PNG.
+Open the HTML in a WebGL-capable browser to rotate, zoom and pan, without a Python service or external script downloads. Use the top `Rank 1`, `Rank 2`, etc. tabs to switch structures in a single view. Each structure retains its own camera state; `Reset view` restores the active structure’s initial camera. HTML always shows one structure at a time; explicit `-n` is rejected; grid layout applies only to SVG/PNG. A browser overlay retains ranks, weights, atom labels and charge notes; charge text follows its atom while facing the screen. `--hide-charges` and `--show-atom-labels` also apply. Transparent backgrounds are supported for SVG/PNG.
 
 ### 3.9 Command Selection
 
@@ -478,7 +512,7 @@ Open the HTML in a WebGL-capable browser to rotate, zoom and pan, without a Pyth
 - Generate only a Gaussian NBO input: use `xyz2nbo`.
 - Generate an XMVB `.xmi` from an NBO `.fch`/`.chk`: use `nbo2xmi`.
 - Convert an `.fch` file to a minimal XMVB initial guess: use `fch2vb` or `fch2xmi`.
-- Plot an `.xmo` output: use `xmo2svg` or `draw_xmo`.
+- Plot an `.xmo` output: use `xmoview`.
 - Extract an `.xmo` result summary: use `xmo2json`.
 - Replace an `.xmi` initial guess with an `.orb` file: use `xmo2xmi`.
 

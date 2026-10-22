@@ -12,6 +12,8 @@ import numpy as np
 
 from .molecule_bond_variant_drawer import ValenceBondStructureInfo
 from .electron_distribution import charge_notes, electron_counts
+from .atom_legend import append_atom_legend_png, atom_legend_entries
+from .charge_annotations import add_png_charge_labels
 
 if TYPE_CHECKING:
     from ..io.xmo_output_parser import XmoParsedData
@@ -213,6 +215,10 @@ ATOM_COLORS = {
 }
 ATOM_RADII = {"H": 0.14, "C": 0.23, "N": 0.25, "O": 0.24}
 PAIR_COLOR = "#BB1938"
+COLOR_SCHEMES = {
+    "element": {"framework": None, "active": PAIR_COLOR},
+    "highlight": {"framework": "#C8CDD3", "active": "#FF3030"},
+}
 
 
 def render_pyvista_scene(
@@ -223,6 +229,10 @@ def render_pyvista_scene(
     panel_size: int = 640,
     show_atom_labels: bool = False,
     show_charges: bool = True,
+    show_lone_pairs: bool = True,
+    circle_charges: bool = False,
+    color_scheme: str = "element",
+    show_legend: bool = True,
     transparent_background: bool = False,
     projection: str = "pca",
     azimuth: float | None = None,
@@ -238,6 +248,10 @@ def render_pyvista_scene(
     """
     if structures_per_row < 1 or panel_size < 128:
         raise ValueError("structures_per_row must be positive and panel_size must be at least 128")
+    if color_scheme not in COLOR_SCHEMES:
+        raise ValueError("color_scheme must be 'element' or 'highlight'")
+    framework_color = COLOR_SCHEMES[color_scheme]["framework"]
+    pair_color = COLOR_SCHEMES[color_scheme]["active"]
     output = Path(output)
     html_output = output.suffix.lower() == ".html"
     if output.suffix.lower() not in (".png", ".html"):
@@ -271,6 +285,7 @@ def render_pyvista_scene(
     visible = set(scene.visible_atoms)
     framework = set(scene.bonds)
     html_panels = []
+    atom_legend = atom_legend_entries(scene.symbols, scene.visible_atoms, ATOM_COLORS) if show_legend else []
 
     def sphere(point, radius, color):
         mesh = pv.Sphere(center=point, radius=radius, theta_resolution=28, phi_resolution=28)
@@ -300,6 +315,8 @@ def render_pyvista_scene(
                                   for atom in scene.visible_atoms)
                 if show_charges:
                     labels.extend(dict(text=note.replace("-", "−"), kind="charge",
+                                       color=pair_color,
+                                       circle=circle_charges,
                                        position=scene.coordinates[atom].tolist(),
                                        radius=ATOM_RADII.get(scene.symbols[atom].upper(), 0.26))
                                   for atom, note in scene.charge_notes[index].items())
@@ -314,8 +331,8 @@ def render_pyvista_scene(
             for a, b in scene.bonds:
                 start, end = scene.coordinates[[a, b]]
                 middle = (start + end) / 2
-                stick(start, middle, 0.065, ATOM_COLORS.get(scene.symbols[a].upper(), "#888888"))
-                stick(middle, end, 0.065, ATOM_COLORS.get(scene.symbols[b].upper(), "#888888"))
+                stick(start, middle, 0.065, framework_color or ATOM_COLORS.get(scene.symbols[a].upper(), "#888888"))
+                stick(middle, end, 0.065, framework_color or ATOM_COLORS.get(scene.symbols[b].upper(), "#888888"))
             for atom in scene.visible_atoms:
                 symbol = scene.symbols[atom].upper()
                 sphere(scene.coordinates[atom], ATOM_RADII.get(symbol, 0.26),
@@ -330,12 +347,14 @@ def render_pyvista_scene(
                 offset = 0.29 + occurrences[pair] * 0.18
                 occurrences[pair] += 1
                 if a == b:
+                    if not show_lone_pairs:
+                        continue
                     point = scene.coordinates[a] + normal * (0.50 + (occurrences[pair] - 1) * 0.2)
                     for sign in (-1, 1):
-                        sphere(point + tangent * sign * 0.09, 0.065, PAIR_COLOR)
+                        sphere(point + tangent * sign * 0.09, 0.065, pair_color)
                 elif pair in framework:
                     stick(scene.coordinates[a] + normal * offset,
-                          scene.coordinates[b] + normal * offset, 0.047, PAIR_COLOR)
+                          scene.coordinates[b] + normal * offset, 0.047, pair_color)
                 else:
                     # Cross-ring/fragment pairings are separate from framework bonds.
                     start, end = scene.coordinates[[a, b]]
@@ -344,25 +363,24 @@ def render_pyvista_scene(
                               + normal * (offset + 0.65 * np.sin(np.pi * t))[:, None])
                     for segment in range(len(points) - 1):
                         if segment % 3 != 2:
-                            stick(points[segment], points[segment + 1], 0.04, PAIR_COLOR)
+                            stick(points[segment], points[segment + 1], 0.04, pair_color)
             for atom, count in Counter(structure.unpaired_atoms).items():
                 for number in range(count):
                     sphere(scene.coordinates[atom - 1] + normal * 0.55
-                           + tangent * number * 0.18, 0.075, PAIR_COLOR)
+                           + tangent * number * 0.18, 0.075, pair_color)
 
             if show_atom_labels:
                 labels = [f"{scene.symbols[i]}{i + 1}" for i in scene.visible_atoms]
                 plotter.add_point_labels(scene.coordinates[scene.visible_atoms] + normal * 0.35,
                                          labels, show_points=False, always_visible=True,
                                          font_size=14, shape_opacity=0, text_color="#111111")
-            if show_charges and scene.charge_notes[index]:
+            if not html_output and show_charges and scene.charge_notes[index]:
                 notes = scene.charge_notes[index]
                 atoms = list(notes)
-                plotter.add_point_labels(
-                    scene.coordinates[atoms] + charge_offset,
-                    [notes[atom].replace("-", "−") for atom in atoms],
-                    show_points=False, always_visible=True, font_size=20, bold=True,
-                    shape_opacity=0, text_color=PAIR_COLOR,
+                add_png_charge_labels(
+                    plotter, scene.coordinates[atoms] + charge_offset, list(notes.values()),
+                    color=pair_color, circle=circle_charges, parallel_scale=parallel_scale,
+                    panel_size=panel_size, screen_right=screen_right, screen_up=screen_up,
                 )
             plotter.add_text(f"Rank {index + 1}", position="upper_left", font_size=13,
                              color="#333333", font="arial")
@@ -375,10 +393,12 @@ def render_pyvista_scene(
         output.parent.mkdir(parents=True, exist_ok=True)
         if html_output:
             from .html_export import export_interactive_html
-            export_interactive_html(plotter, output, html_panels)
+            export_interactive_html(plotter, output, html_panels, atom_legend=atom_legend)
         else:
             plotter.screenshot(str(output), transparent_background=transparent_background,
                                return_img=False)
+            if show_legend:
+                append_atom_legend_png(output, atom_legend, transparent=transparent_background)
     finally:
         plotter.close()
     return output
