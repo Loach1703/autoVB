@@ -1216,7 +1216,8 @@ class XMVBNBO:
     def get_xmidata(self, method_override: Optional[str] = None) -> 'XMIData':
         vbsetting = self.input_data.vbsettings
         method = (method_override or self.input_data.method).lower()
-        iscf = vbsetting.iscf
+        from ..utils.xmi import resolve_xmi_iscf
+        iscf = resolve_xmi_iscf(vbsetting.xmitype, vbsetting.iscf)
         stru_type = vbsetting.stru
         nae, nao = self.active_electron, self.active_orbital
 
@@ -1246,7 +1247,7 @@ class XMVBNBO:
             if method == 'lam-dfvb':
                 logger.info("LAM-DFVB method detected, currently only BLYP functional is available.")
                 method = 'lam-dfvb=blyp'
-            if method == 'bovb':
+            if method == 'bovb' and vbsetting.xmitype != 'open':
                 logger.info("BOVB method detected, only iscf=2 will be used regardless of user input.")
                 iscf = 2
 
@@ -1281,5 +1282,6 @@ class XMVBNBO:
             orb_section=orb_section,
             geo_section=self.geometry_text,
             init_guess_section=init_guess_section,
+            xmitype=vbsetting.xmitype,
         )
         return xmidata

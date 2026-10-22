@@ -169,6 +169,8 @@ Specifies the integral method used by XMVB. Available values are `libcint`, `ri`
 ##### 2.3.3.3 iscf=n
 Specifies the orbital-optimization method used by XMVB. Available values are `2`, `5`, and `6`. The default is `5`. See the [XMVB documentation](https://xmvb.xmu.edu.cn/docs/xmvb/content.html#iscf-n) for details.
 
+With `xmitype=open`, only integers `7`, `8`, and `9` are accepted, with a default of `8`. Explicitly supplying any other value raises `ValueError`.
+
 ##### 2.3.3.4 sort
 Sorts the valence bond structures according to their structure coefficients.
 
@@ -192,6 +194,15 @@ Skips the GVB calculation and reads existing MOKIT output.
 
 ##### 2.3.3.9 bovb_stream
 Applies only to the BOVB method. When enabled, autoVB first runs a VBSCF calculation using the `xxx_vb` base name, then uses the resulting `.orb` initial guess to generate `xxx_bovb.xmi` and run BOVB. Currently, only the first-stage VBSCF output is parsed and written to `xxx_vb.json`; the BOVB `.xmo` file is retained but is not yet parsed or converted to JSON or SVG. This option is ignored when `novb` is also enabled.
+
+##### 2.3.3.10 xmitype=n
+A string selecting the XMI output type: `4` (default), `2026`, or `open`. `4` retains the existing format, and `2026` currently behaves identically. `open` defaults to `iscf=8`, accepts only `iscf=7/8/9`, and writes exactly one `eigensolver=davidson` option in `$ctrl`, replacing any existing passthrough solver setting. This ISCF setting is retained for BLW initial guesses and both BOVB stages instead of being forced to `5` or `2`. `xmitype` is an autoVB option and is not emitted as an XMVB keyword.
+
+```text
+autovb{xmitype=open}
+autovb{xmitype=open,iscf=9}
+autovb{xmitype=2026}
+```
 
 #### 2.3.4 Plotting Parameters
 

@@ -6,6 +6,7 @@ import json
 import re
 
 from ..utils.constants import SUPPORTED_METHODS, to_gaussian_basis_name
+from ..utils.xmi import resolve_xmi_iscf
 
 if TYPE_CHECKING:
     from ..main import XMIPassthrough, autoVBInputData
@@ -21,7 +22,7 @@ class XMIData:
     method: str
     stru_type: str
     int_type: str
-    iscf: int
+    iscf: int | None
     nae: int
     nao: int
     ncharge: int
@@ -31,15 +32,18 @@ class XMIData:
     orb_section: str
     geo_section: str
     init_guess_section: str
+    xmitype: str = "4"
 
 def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthrough'= None):
     '''
     将 XMIData 数据格式写入 .xmi 文件。
+    xmitype 为 '4'/'2026' 时沿用原格式；'open' 仅接受 iscf=7/8/9，默认 8，固定 Davidson 求解器。
     Args:
         filename (str): 输出文件名
         xmidata (XMIData): 包含轨道数据和相关信息的对象
         xmi_passthrough (XMIPassthrough): 包含透传数据的对象，可选
     '''
+    iscf = resolve_xmi_iscf(xmidata.xmitype, xmidata.iscf)
     xmi_path = Path(filename).with_suffix('.xmi')
     def ctrl_key(line: str) -> str:
         s = line.strip().lower()
@@ -55,6 +59,20 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
     else:
         extra_lines = []
         extra_keys = set()
+
+    if xmidata.xmitype == "open":
+        # Enforce one solver and prevent passthrough settings from bypassing ISCF validation.
+        for line in extra_lines:
+            for value in re.findall(r"(?<!\S)iscf\s*=\s*(\S+)", line, re.IGNORECASE):
+                if not re.fullmatch(r"[+-]?\d+", value):
+                    raise ValueError("xmitype=open requires integer iscf=7, 8, or 9")
+                extra_iscf = resolve_xmi_iscf("open", int(value))
+                if extra_iscf != iscf:
+                    raise ValueError("Conflicting iscf in open XMI passthrough settings")
+        managed_options = re.compile(r"(?<!\S)(?:eigensolver|iscf)\s*=\s*\S+", re.IGNORECASE)
+        extra_lines = [managed_options.sub("", line).strip() for line in extra_lines]
+        extra_lines = [line for line in extra_lines if line]
+        extra_keys = {ctrl_key(line) for line in extra_lines}
 
     def is_nstr() -> bool:
         if xmi_passthrough and xmi_passthrough.str_section_text is not None:
@@ -76,10 +94,12 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
         f"nae={xmidata.nae}",
         f"ncharge={xmidata.ncharge}",
         f"nmul={xmidata.nmul}",
-        f"iscf={xmidata.iscf}",
+        f"iscf={iscf}",
         f"int={xmidata.int_type}",
         f"basis={xmidata.basis_set}",
     ]
+    if xmidata.xmitype == "open":
+        ctrl_lines.append("eigensolver=davidson")
 
     default_extra_lines = [
         "iprint=3",

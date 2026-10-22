@@ -21,6 +21,7 @@ from .utils.utils import (
     find_tool,
 )
 from .io.logging_config import get_logger
+from .utils.xmi import resolve_xmi_iscf
 from .nbo.nbo import XMVBNBO
 
 from mokit.lib.gaussian import load_mol_from_fch
@@ -51,7 +52,7 @@ class VBSettings:
     aoa_bond: list[list[int]] = field(default_factory=list) # 旧的活性原子列表，包含每个轨道对应的原子，例如 [[1, 2], [2, 3], [3, 4]] 表示第一个轨道对应原子1和2，第二个轨道对应原子2和3，第三个轨道对应原子3和4
     aoi: list[int] = field(default_factory=list) # 活性轨道列表 active orbital indices，例如 [1, 2, 3] 表示活性的nbo轨道共有3个，索引从1开始计数
     inte: str = "libcint"
-    iscf: int = 5
+    iscf: Optional[int] = None  # None distinguishes omission from an explicit iscf=5.
     atom_slice: bool = False
     bond_first: bool = False
     nolp: bool = False
@@ -72,11 +73,17 @@ class VBSettings:
     hide_svg_labels: bool = False
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
+    xmitype: str = "4"
+
+    def __post_init__(self) -> None:
+        if self.iscf is None:
+            self.iscf = 8 if self.xmitype == "open" else 5
 
     def validate(self) -> None:
         """
         验证 VBSettings 各字段的合法性，发现非法值则抛出 ValueError。
         """
+        self.iscf = resolve_xmi_iscf(self.xmitype, self.iscf)
         if self.nae < 0:
             raise ValueError("VBSettings: 'nae' must be >= 0")
         if self.nao < 0:
@@ -372,7 +379,8 @@ class autoVBMain:
 
         if self._use_bovb_stream():
             xmidata.method = 'vbscf'
-            xmidata.iscf = 5
+            if xmidata.xmitype != 'open':
+                xmidata.iscf = 5
         
         passthrough = self.input_data.xmi_passthrough
         write_xmi_file(xmi_path, xmidata, passthrough)
@@ -384,9 +392,10 @@ class autoVBMain:
 
         xmi_path = Path(f"{self.blw_name}.xmi")
         xmidata = self.wxp.get_xmidata(method_override='blw')
-        xmidata.iscf = 5
+        if xmidata.xmitype != 'open':
+            xmidata.iscf = 5
         write_xmi_file(xmi_path, xmidata, self.input_data.xmi_passthrough)
-        logger.info(f"Generated BLW initial-guess input file {xmi_path} successfully with iscf=5.")
+        logger.info(f"Generated BLW initial-guess input file {xmi_path} successfully with iscf={xmidata.iscf}.")
 
     def read_blw_orbitals(self) -> np.ndarray:
         """读取收敛的 BLW 轨道，并保持原始 NBO 占据轨道顺序。"""
@@ -408,7 +417,8 @@ class autoVBMain:
         xmidata = xg.get_xmidata()
         if self._use_bovb_stream():
             xmidata.method = 'vbscf'
-            xmidata.iscf = 5
+            if xmidata.xmitype != 'open':
+                xmidata.iscf = 5
         write_xmi_file(xmi_path, xmidata, self.input_data.xmi_passthrough)
         logger.info(f"Generated XMVB input file {xmi_path} successfully from GVB orbitals.")
 
@@ -583,7 +593,8 @@ class autoVBMain:
             Path(f"{self.xmi_name}.xmi"),
             Path(f"{self.bovb_name}.xmi"),
             "bovb",
-            2,
+            (resolve_xmi_iscf('open', self.input_data.vbsettings.iscf)
+             if self.input_data.vbsettings.xmitype == 'open' else 2),
         )
 
         log_subroutine("Entry XMVB BOVB Calculation")
