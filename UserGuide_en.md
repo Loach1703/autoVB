@@ -204,6 +204,31 @@ autovb{xmitype=open,iscf=9}
 autovb{xmitype=2026}
 ```
 
+##### 2.3.3.11 orb=n
+Selects the orbital expansion mode. The default is `hao`. This option is independent of the initial-guess source `guess` and preserves the selected active space, orbital numbering, and VB structures.
+
+| Value | Orbital domains | Calculation sequence |
+| --- | --- | --- |
+| `hao` | Preserve the existing localized HAO domains | Direct calculation; unchanged default |
+| `mixed` | Expand inactive orbitals over all atoms; retain the active orbital domains | Direct calculation, without an additional HAO stage |
+| `oeo` | Expand all orbitals over all atoms | HAO-VBSCF first, then OEO using the resulting `.orb` guess |
+| `oeo_direct` | Expand all orbitals over all atoms | Use the selected `guess` directly, without an additional HAO stage |
+
+`mixed` writes `orbtyp=hao` and `frgtyp=atom`, expanding only inactive domains in `$orb`. Both OEO modes write `orbtyp=oeo` and explicit all-atom `$orb` definitions for every orbital. Explicit `mixed` and OEO modes replace passthrough `orbtyp` and `frgtyp` options while retaining other controls. `orb` itself is not emitted as an XMVB keyword.
+
+With `orb=oeo`, autoVB runs HAO-VBSCF using `xxx_vb_hao.xmi`, then reads `xxx_vb_hao.orb` to generate `xxx_vb.xmi`. A detected HAO convergence failure stops the sequence. With `bovb_stream`, the sequence is HAO-VBSCF → OEO-VBSCF → OEO-BOVB. With `guess=blw`, the existing BLW initial-guess calculation precedes these stages. The HAO stage retains the configured ISCF for `xmitype=open` and uses `iscf=5` for other formats.
+
+`orb=oeo,novb` only prepares the HAO precursor: it does not run HAO or generate an OEO input requiring its converged orbitals. The existing BLW initial-guess calculation behavior for `guess=blw` remains unchanged. OEO energies and orbital structure weights are parsed without assigning delocalized orbitals to individual atoms, so automatic atom-mapped drawing is skipped.
+
+```text
+autovb{orb=mixed}
+autovb{orb=oeo,xmitype=2026}
+autovb{orb=oeo_direct}
+autovb{orb=oeo,guess=blw,bovb_stream}
+```
+
+The last example requires the BOVB method; `bovb_stream` applies only to BOVB.
+
 #### 2.3.4 Plotting Parameters
 
 ##### 2.3.4.1 draw_xmo

@@ -261,17 +261,21 @@ class XmoParser:
 
         # 先提取 XMO 中回显的输入片段，后续解析都基于这些块。
         ctrl_lines = self._section_lines(lines, "$ctrl")
-        orb_lines = self._section_lines(lines, "$orb")
-        geo_lines = self._section_lines(lines, "$geo")
+        ctrl_options = self._parse_ctrl_options(ctrl_lines)
+        is_oeo = str(ctrl_options.get("orbtyp", "")).lower() == "oeo"
+        orb_lines = (self._section_lines(lines, "$orb")
+                     if not is_oeo or any(line.strip().lower() == "$orb" for line in lines) else [])
+        geo_lines = (self._section_lines(ctrl_lines, "&geo")
+                     if any(line.strip().lower() == "&geo" for line in ctrl_lines)
+                     else self._section_lines(lines, "$geo"))
 
         # $ctrl 决定方法、基组和活性空间大小；$orb 决定轨道到原子的映射
-        ctrl_options = self._parse_ctrl_options(ctrl_lines)
         method = self._parse_method(ctrl_lines)
         nao = self._parse_required_int(ctrl_lines, "nao")
         multiplicity = self._parse_optional_int(ctrl_lines, "nmul", default=1)
         unpaired_electron_count = max(0, multiplicity - 1)
         orb = self._parse_orb(orb_lines)
-        orbital_to_atom = self._active_orbital_to_atom(orb, nao)
+        orbital_to_atom = {} if is_oeo else self._active_orbital_to_atom(orb, nao)
 
         # 能量摘要是可变字段，不同方法会给出不同的能量项，因此单独解析成字典供后续按需选取。
         energy_terms = self._parse_energy_terms(lines)
@@ -343,6 +347,7 @@ class XmoParser:
             ValueError: 找不到片段开始或结束标记。
         """
         normalized_section = section_name.lower()
+        section_end = "&end" if normalized_section.startswith("&") else self._SECTION_END
         start_index: int | None = None
 
         for index, line in enumerate(lines):
@@ -355,11 +360,11 @@ class XmoParser:
 
         collected: list[str] = []
         for line in lines[start_index + 1 :]:
-            if line.strip().lower() == self._SECTION_END:
+            if line.strip().lower() == section_end:
                 return collected
             collected.append(line)
 
-        raise ValueError(f"Section {section_name!r} is missing {self._SECTION_END!r}.")
+        raise ValueError(f"Section {section_name!r} is missing {section_end!r}.")
 
     def _parse_required_int(self, lines: list[str], key: str) -> int:
         """从 `$ctrl` 行中读取必需的整数参数。
@@ -436,7 +441,13 @@ class XmoParser:
 
     def _iter_ctrl_items(self, lines: list[str]) -> Iterator[tuple[str, str | None]]:
         """按空白拆分 `$ctrl`，生成 `(key, value)` 项。"""
+        in_raw_block = False
         for line in lines:
+            if line.strip().startswith("&"):
+                in_raw_block = line.strip().lower() != "&end"
+                continue
+            if in_raw_block:
+                continue
             tokens = self._strip_comment(line).split()
             index = 0
             while index < len(tokens):
@@ -864,6 +875,8 @@ class XmoParser:
         orbital_to_atom: dict[int, int],
     ) -> list[Pair]:
         """把活性轨道连接映射为原子连接。"""
+        if not orbital_to_atom:
+            return []
         return [
             (orbital_to_atom[begin], orbital_to_atom[end])
             for begin, end in orbital_connections
@@ -875,6 +888,8 @@ class XmoParser:
         orbital_to_atom: dict[int, int],
     ) -> list[int]:
         """把活性轨道编号列表映射为原子编号列表。"""
+        if not orbital_to_atom:
+            return []
         return [orbital_to_atom[orbital] for orbital in orbitals]
 
     @staticmethod

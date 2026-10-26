@@ -7,6 +7,7 @@ import re
 
 from ..utils.constants import SUPPORTED_METHODS, to_gaussian_basis_name
 from ..utils.xmi import resolve_xmi_iscf
+from ..utils.orbital_modes import orbital_definition, without_orbital_options
 
 if TYPE_CHECKING:
     from ..main import XMIPassthrough, autoVBInputData
@@ -33,6 +34,7 @@ class XMIData:
     geo_section: str
     init_guess_section: str
     xmitype: str = "4"
+    orb: str = "hao"
 
 def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthrough'= None):
     '''
@@ -60,6 +62,12 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
     else:
         extra_lines = []
         extra_keys = set()
+
+    if xmidata.orb != "hao":
+        extra_lines = without_orbital_options(extra_lines)
+        extra_keys = {ctrl_key(line) for line in extra_lines}
+    natoms = sum(bool(line.split("#", 1)[0].strip()) for line in xmidata.geo_section.splitlines())
+    orbtyp, orb_section = orbital_definition(xmidata.orb_section, xmidata.orb, xmidata.nao, natoms)
 
     if xmidata.xmitype == "open":
         # Enforce one solver and prevent passthrough settings from bypassing ISCF validation.
@@ -109,7 +117,7 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
 
     default_extra_lines = [
         "iprint=3",
-        "orbtyp=hao",
+        f"orbtyp={orbtyp}",
         "frgtyp=atom",
         "itmax=2000",
         "molden",
@@ -133,7 +141,7 @@ $ctrl
 $end
 
 $orb
-{xmidata.orb_section}
+{orb_section}
 $end
 '''
     if xmidata.xmitype != "2026":

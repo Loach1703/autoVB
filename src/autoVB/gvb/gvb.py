@@ -1160,6 +1160,7 @@ class XMVBGVB:
             geo_section=self.geometry_text,
             init_guess_section=init_guess_section,
             xmitype=vbsetting.xmitype,
+            orb='hao' if self.input_data.method.lower() == 'blw' else vbsetting.orb,
         )
 
 

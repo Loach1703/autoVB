@@ -196,6 +196,31 @@ autovb{xmitype=open,iscf=9}
 autovb{xmitype=2026}
 ```
 
+##### 2.3.3.11 orb=n
+选择轨道展开方式，字符串参数，默认为 `hao`。它与初猜来源 `guess` 分开设置，不改变已选择的活性空间、轨道编号或价键结构。
+
+| 值 | 轨道展开方式 | 计算流程 |
+| --- | --- | --- |
+| `hao` | 保留当前 HAO 定域范围 | 直接计算，默认行为不变 |
+| `mixed` | 非活性轨道在全体系展开，活性轨道保留原来的原子范围 | 直接计算，不增加 HAO 预计算 |
+| `oeo` | 所有轨道在全体系展开 | 先运行 HAO-VBSCF，再以其 `.orb` 作为初猜计算 OEO |
+| `oeo_direct` | 所有轨道在全体系展开 | 直接使用所选 `guess`，不增加 HAO 预计算 |
+
+`mixed` 写出 `orbtyp=hao`、`frgtyp=atom`，通过 `$orb` 扩展非活性轨道的原子范围；两个 OEO 模式写出 `orbtyp=oeo`，并给所有轨道提供全体系的 `$orb` 定义。显式选择 `mixed` 或 OEO 时，会替换透传的 `orbtyp`、`frgtyp`，其他控制选项照常保留。`orb` 本身不作为 XMVB 关键字写出。
+
+`orb=oeo` 使用 `xxx_vb_hao.xmi` 进行 HAO-VBSCF，随后读取 `xxx_vb_hao.orb` 并生成 `xxx_vb.xmi`。若检测到 HAO 未收敛则停止。与 `bovb_stream` 组合时，顺序为 HAO-VBSCF → OEO-VBSCF → OEO-BOVB；与 `guess=blw` 组合时，BLW 初猜计算位于这些阶段之前。`xmitype=open` 的 `iscf` 设置在 HAO 阶段继续保留，其他格式的 HAO 预计算使用 `iscf=5`。
+
+`orb=oeo,novb` 只准备 HAO 前置输入，不运行 HAO，也不生成依赖其收敛轨道的 OEO 输入。`guess=blw` 原有的 BLW 初猜计算行为不受此设置改变。OEO 结果可解析能量和轨道结构权重，但不提供轨道到单个原子的映射，因此自动原子连线绘图会跳过。
+
+```text
+autovb{orb=mixed}
+autovb{orb=oeo,xmitype=2026}
+autovb{orb=oeo_direct}
+autovb{orb=oeo,guess=blw,bovb_stream}
+```
+
+最后一个例子需配合 BOVB 方法；`bovb_stream` 仅对 BOVB 生效。
+
 #### 2.3.4 绘图相关
 
 ##### 2.3.4.1 draw_xmo

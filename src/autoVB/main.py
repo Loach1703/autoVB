@@ -7,7 +7,7 @@ import numpy as np
 import datetime
 from pathlib import Path
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
 from collections import Counter
 from contextlib import redirect_stdout
@@ -22,6 +22,7 @@ from .utils.utils import (
 )
 from .io.logging_config import get_logger
 from .utils.xmi import resolve_xmi_iscf
+from .utils.orbital_modes import ORB_MODES, without_orbital_options
 from .nbo.nbo import XMVBNBO
 
 from mokit.lib.gaussian import load_mol_from_fch
@@ -74,6 +75,7 @@ class VBSettings:
     draw_rumer: bool = False
     nbo: str = 'hf' # nbo计算方法，默认为hf，可以设为b3lyp等
     xmitype: str = "4"
+    orb: str = "hao"
 
     def __post_init__(self) -> None:
         if self.iscf is None:
@@ -84,6 +86,9 @@ class VBSettings:
         验证 VBSettings 各字段的合法性，发现非法值则抛出 ValueError。
         """
         self.iscf = resolve_xmi_iscf(self.xmitype, self.iscf)
+        self.orb = self.orb.strip().lower()
+        if self.orb not in ORB_MODES:
+            raise ValueError("orb must be 'hao', 'mixed', 'oeo', or 'oeo_direct'")
         if self.nae < 0:
             raise ValueError("VBSettings: 'nae' must be >= 0")
         if self.nao < 0:
@@ -356,7 +361,6 @@ class autoVBMain:
         3. 使用XMVBNBO类处理NBO输出，进行轨道重排序和切片（如果需要）。
         4. 将处理后的轨道信息写入.xmi文件，供XMVB使用。
         '''
-        from .io.writers import write_xmi_file
         wxp = self.wxp
         method = self.input_data.method.lower()
 
@@ -382,8 +386,7 @@ class autoVBMain:
             if xmidata.xmitype != 'open':
                 xmidata.iscf = 5
         
-        passthrough = self.input_data.xmi_passthrough
-        write_xmi_file(xmi_path, xmidata, passthrough)
+        xmi_path = self._write_vb_input(xmi_path, xmidata)
         logger.info(f"Generated XMVB input file {xmi_path} successfully.")
 
     def generate_blw_to_xmi(self):
@@ -408,7 +411,6 @@ class autoVBMain:
 
     def generate_gvb_to_xmi(self):
         from .gvb.gvb import XMVBGVB
-        from .io.writers import write_xmi_file
         wxp = self.wxp
         fch = self.get_gvb_filename()
         xg = XMVBGVB(fch, self.input_data, orbital_atoms=wxp.occ_orb_atom)
@@ -419,8 +421,44 @@ class autoVBMain:
             xmidata.method = 'vbscf'
             if xmidata.xmitype != 'open':
                 xmidata.iscf = 5
-        write_xmi_file(xmi_path, xmidata, self.input_data.xmi_passthrough)
+        xmi_path = self._write_vb_input(xmi_path, xmidata)
         logger.info(f"Generated XMVB input file {xmi_path} successfully from GVB orbitals.")
+
+    def _write_vb_input(self, path: Path, data: 'XMIData') -> Path:
+        """Write a direct input or prepare the HAO precursor to an OEO job."""
+        from .io.writers import write_xmi_file
+
+        mode = self.input_data.vbsettings.orb
+        data = replace(data, orb=mode)
+        passthrough = self.input_data.xmi_passthrough
+        if mode == 'oeo':
+            self._oeo_target_path = path
+            self._oeo_target_data = data
+            path = path.with_name(f"{path.stem}_hao.xmi")
+            data = replace(data, orb='hao', method='vbscf',
+                           iscf=data.iscf if data.xmitype == 'open' else 5)
+            passthrough = replace(passthrough, ctrl_extra_lines=without_orbital_options(
+                passthrough.ctrl_extra_lines)) if passthrough is not None else None
+        write_xmi_file(path, data, passthrough)
+        return path
+
+    def run_oeo_preparation(self) -> Path:
+        """Run HAO-VBSCF once and pass its orbital coefficients to the OEO job."""
+        from .io.writers import write_xmi_file
+
+        path = self._oeo_target_path
+        hao_path = path.with_name(f"{path.stem}_hao.xmi")
+        log_subroutine("Entry HAO to OEO Initial Guess Calculation")
+        self.timed_call('run_xmvb_hao', self.run_xmvb, str(hao_path.with_suffix('')))
+        parsed = self.timed_call('parser_xmo_hao', self.parser_xmo,
+                                 hao_path.with_suffix('.xmo'), 'vbscf')
+        if parsed is not None and parsed.converged is False:
+            raise RuntimeError(f"HAO calculation did not converge: {hao_path.with_suffix('.xmo')}")
+        data = replace(self._oeo_target_data,
+                       init_guess_section=hao_path.with_suffix('.orb').read_text())
+        write_xmi_file(path, data, self.input_data.xmi_passthrough)
+        logger.info("Prepared OEO input %s using the converged HAO orbitals.", path)
+        return path
 
     def run_subprocess_command(self, command: str, success_message: str, error_message: str):
         logger.info(f"Running command: {command}")
@@ -675,6 +713,8 @@ class autoVBMain:
         # VB计算是可选的，如果novb设置为True，则跳过VB计算步骤，仅生成 .xmi 文件
         if self.input_data.vbsettings.novb:
             logger.info("VB calculation is skipped due to novb setting.(only generate xmi file from NBO orbitals)")
+            if self.input_data.vbsettings.orb == 'oeo':
+                logger.info("Only the HAO precursor is prepared; OEO input requires its converged .orb file.")
         else:
             log_subroutine("Entry XMVB Calculation")
             if not self.xmvb_exe:
@@ -684,6 +724,8 @@ class autoVBMain:
                     "Starting final %s calculation with the converged BLW initial guess.",
                     self.input_data.method.upper(),
                 )
+            if self.input_data.vbsettings.orb == 'oeo':
+                self.run_oeo_preparation()
             if bovb_stream:
                 xmo_path = self.run_bovb_stream()
             else:
@@ -699,6 +741,9 @@ class autoVBMain:
 
         if self.input_data.vbsettings.xmo2svg is not None and is_bovb:
             logger.warning("Skipping xmo2svg because BOVB output parsing is not supported yet.")
+        elif (self.input_data.vbsettings.xmo2svg is not None
+              and self.input_data.vbsettings.orb in ('oeo', 'oeo_direct')):
+            logger.info("Skipping atom-mapped drawing for delocalized OEO orbitals.")
         elif self.input_data.vbsettings.xmo2svg is not None:
             log_subroutine("Entry xmo2svg")
             self.timed_call(

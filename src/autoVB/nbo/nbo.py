@@ -1283,5 +1283,6 @@ class XMVBNBO:
             geo_section=self.geometry_text,
             init_guess_section=init_guess_section,
             xmitype=vbsetting.xmitype,
+            orb='hao' if (method_override or self.input_data.method).lower() == 'blw' else vbsetting.orb,
         )
         return xmidata
