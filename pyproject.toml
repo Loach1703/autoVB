@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autoVB"
-version = "0.1.4"
+version = "0.1.5"
 description = "A generator of XMVB input file: AutoVB tools"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,17 +16,25 @@ dependencies = [
     "pyssian",
 ]
 
+[project.optional-dependencies]
+visualization = ["pyvista>=0.44,<0.50"]
+visualization-html = ["pyvista>=0.49,<0.50", "trame-pyvista>=0.2,<0.3", "nest-asyncio2>=1.7,<2"]
+
 [project.scripts]
 xyz2nbo = "autoVB.cli.nbo:autovb_nbo"
 nbo2xmi = "autoVB.cli.xmi:autovb_xmi"
 autovb = "autoVB.cli.autovb:autovb_main"
 autovb_test = "autoVB.cli.autovb_test:autovb_test"
-draw_xmo = "autoVB.cli.xmo2svg:xmo2svg"
+xmoview = "autoVB.cli.xmoview:xmoview"
+draw_xmo = "autoVB.cli.draw_xmo:draw_xmo"
 fch2vb = "autoVB.cli.fch2vb:fch2vb"
 fch2xmi = "autoVB.cli.fch2vb:fch2vb"
 xmo2json = "autoVB.cli.xmo2json:xmo2json"
+xmo2dataset = "autoVB.cli.xmo2dataset:xmo2dataset"
 xmo2xmi = "autoVB.cli.xmo2xmi:xmo2xmi"
 xmo2svg = "autoVB.cli.xmo2svg:xmo2svg"
+xmo2png = "autoVB.cli.xmo2png:xmo2png"
+xmo2html = "autoVB.cli.xmo2html:xmo2html"
 
 [tool.setuptools.package-dir]
 "" = "src"

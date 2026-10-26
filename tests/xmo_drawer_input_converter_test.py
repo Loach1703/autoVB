@@ -1,4 +1,6 @@
 import re
+from xml.etree import ElementTree
+import pytest
 
 from rdkit import Chem
 
@@ -6,6 +8,31 @@ from autoVB.draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDraw
 from autoVB.draw_xmo.molecule_bond_variant_drawer import ValenceBondStructureInfo
 from autoVB.draw_xmo.xmo_drawer_input_converter import XmoToDrawerInputConverter
 from autoVB.io.xmo_output_parser import XmoParser
+
+
+def test_lowdin_diaeresis_renders_in_single_and_multiline_legends():
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    for legend in ("Löwdin 2 w=0.80000", "CC 2 w=0.10000\nLöwdin 2 w=0.80000"):
+        drawer = rdMolDraw2D.MolDraw2DSVG(520, 390)
+        rendered = legend.replace("ö", "o")
+        drawer.DrawMolecule(Chem.MolFromSmiles("CC"), legend=rendered)
+        drawer.FinishDrawing()
+        svg = MoleculeBondVariantDrawer._increase_multiline_legend_spacing(
+            drawer.GetDrawingText(), rendered, 520, 390
+        )
+        svg = MoleculeBondVariantDrawer._add_legend_diacritics(svg, legend)
+        root = ElementTree.fromstring(svg)
+        marks = [
+            node for node in root.iter()
+            if node.attrib.get("class") == "legend-diacritic"
+        ]
+        assert len(marks) == 1
+        circles = [node for node in marks[0] if node.tag.endswith("circle")]
+        assert len(circles) == 2
+        assert all(float(node.attrib["r"]) > 0 for node in circles)
+        if "\n" in legend:
+            assert marks[0].attrib["transform"].startswith("translate(0,")
 
 
 def write_xmo(tmp_path, text: str):
@@ -230,7 +257,7 @@ Lowdin Weights
 
     assert drawer_input.weight_table == "both"
     assert drawer_input.active_space[0].legend == (
-        "CC 2 w=0.10000\nLowdin 2 w=0.80000"
+        "CC 2 w=0.10000\nLöwdin 2 w=0.80000"
     )
 
 
@@ -290,8 +317,8 @@ def test_charge_label_avoids_svg_atom_bbox_at_right_edge(tmp_path):
     charge_position = (float(charge_match.group(1)), float(charge_match.group(2)))
     charge_bbox = drawer._text_bbox(
         charge_position,
-        26.4 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
-        26.4,
+        39.6 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        39.6,
     )
     assert not drawer._bbox_collides(charge_bbox, [(80.0, 35.0, 98.0, 65.0)])
 
@@ -328,10 +355,35 @@ def test_charge_label_avoids_svg_bond_bbox(tmp_path):
     charge_position = (float(charge_match.group(1)), float(charge_match.group(2)))
     charge_bbox = drawer._text_bbox(
         charge_position,
-        2 * 26.4 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
-        26.4,
+        2 * 39.6 * drawer.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
+        39.6,
     )
     assert not drawer._bbox_collides(charge_bbox, drawer._svg_bond_bboxes(svg))
+
+
+@pytest.mark.parametrize("circle", [False, True])
+def test_svg_charge_text_and_optional_circles(tmp_path, circle):
+    drawer = MoleculeBondVariantDrawer(
+        xyz_file=tmp_path / "unused.xyz", output_dir=tmp_path,
+        active_bond_atom=[], active_space=[], show_atom_labels=False,
+        circle_charges=circle,
+    )
+    root = ElementTree.fromstring(drawer._add_svg_annotations(
+        "<svg></svg>", atom_coords=[(5, 5), (495, 375)],
+        charge_notes={0: "2-", 1: "+"}, lone_pair_counts={}, radical_counts={},
+        width=520, height=390,
+    ))
+    labels = root.findall(".//text")
+    assert [label.text for label in labels] == ["2−", "+"]
+    assert all(label.attrib["font-weight"] == "700" for label in labels)
+    assert all(label.attrib["font-size"] == "39.6px" for label in labels)
+    rings = root.findall(".//circle")
+    assert len(rings) == (2 if circle else 0)
+    for ring, label in zip(rings, labels):
+        x, y, radius = (float(ring.attrib[key]) for key in ("cx", "cy", "r"))
+        assert (x, y) == (float(label.attrib["x"]), float(label.attrib["y"]))
+        assert 0 <= x - radius and x + radius <= 520
+        assert 0 <= y - radius and y + radius <= 390
 
 
 def test_unpaired_electron_movement_does_not_create_charge_notes(tmp_path):
@@ -437,23 +489,23 @@ H  1.2300 -0.9200 0.0000
 
 def test_legend_font_size_prefers_large_text_and_shrinks_long_legends() -> None:
     short_size = MoleculeBondVariantDrawer._legend_font_size(
-        "Lowdin 2 w=0.07160",
+        "Löwdin 2 w=0.07160",
         520,
         390,
     )
     large_size = MoleculeBondVariantDrawer._legend_font_size(
-        "Lowdin 2 w=0.07160",
+        "Löwdin 2 w=0.07160",
         620,
         460,
     )
     long_size = MoleculeBondVariantDrawer._legend_font_size("x" * 52, 520, 390)
     r24_size = MoleculeBondVariantDrawer._legend_font_size(
-        "Lowdin 1 w=0.03884: 1-6 2-7 4-8 5-9",
+        "Löwdin 1 w=0.03884: 1-6 2-7 4-8 5-9",
         520,
         390,
     )
     multiline_size = MoleculeBondVariantDrawer._legend_font_size(
-        "CC 2 w=0.10961\nLowdin 2 w=0.07160",
+        "CC 2 w=0.10961\nLöwdin 2 w=0.07160",
         520,
         390,
     )

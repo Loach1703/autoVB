@@ -1,8 +1,29 @@
 import json
 from types import SimpleNamespace
 
-from autoVB.io.writers import write_json_summary
+import pytest
+
+from autoVB.io.writers import write_automr, write_json_summary
 from autoVB.io.xmo_output_parser import XmoParser
+
+
+@pytest.mark.parametrize("mem,nproc,enough", [
+    ("512MB", 1, False), ("2047MB", 1, False), ("2048MB", 1, True),
+    ("4095MB", 2, False), ("4096MB", 2, True), ("2GB", 1, True),
+])
+def test_automr_memory_requirement_respects_units(tmp_path, monkeypatch, mem, nproc, enough):
+    from autoVB.utils import utils
+
+    monkeypatch.setattr(utils, "pyscf_to_xyz", lambda mol: "H 0 0 0\nH 0 0 0.74")
+    mol = SimpleNamespace(charge=0, spin=0, basis="sto-3g")
+    filename = str(tmp_path / "h2")
+    if not enough:
+        with pytest.raises(ValueError, match="requires at least"):
+            write_automr(mol, filename, mem=mem, nproc=nproc)
+        assert not (tmp_path / "h2.gjf").exists()
+    else:
+        write_automr(mol, filename, mem=mem, nproc=nproc)
+        assert f"%mem={mem}\n" in (tmp_path / "h2.gjf").read_text()
 
 
 def test_write_json_summary_merges_structure_weights(tmp_path, monkeypatch):

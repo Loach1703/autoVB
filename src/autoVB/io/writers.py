@@ -6,6 +6,8 @@ import json
 import re
 
 from ..utils.constants import SUPPORTED_METHODS, to_gaussian_basis_name
+from ..utils.xmi import resolve_xmi_iscf
+from ..utils.orbital_modes import orbital_definition, without_orbital_options
 
 if TYPE_CHECKING:
     from ..main import XMIPassthrough, autoVBInputData
@@ -21,7 +23,7 @@ class XMIData:
     method: str
     stru_type: str
     int_type: str
-    iscf: int
+    iscf: int | None
     nae: int
     nao: int
     ncharge: int
@@ -31,15 +33,20 @@ class XMIData:
     orb_section: str
     geo_section: str
     init_guess_section: str
+    xmitype: str = "4"
+    orb: str = "hao"
 
 def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthrough'= None):
     '''
     将 XMIData 数据格式写入 .xmi 文件。
+    '2026' 使用 CTRL 内嵌 GEO、charge 和 exact 积分名称；'4' 保留原格式。
+    'open' 仅接受 iscf=7/8/9，默认 8，固定 Davidson 求解器。
     Args:
         filename (str): 输出文件名
         xmidata (XMIData): 包含轨道数据和相关信息的对象
         xmi_passthrough (XMIPassthrough): 包含透传数据的对象，可选
     '''
+    iscf = resolve_xmi_iscf(xmidata.xmitype, xmidata.iscf)
     xmi_path = Path(filename).with_suffix('.xmi')
     def ctrl_key(line: str) -> str:
         s = line.strip().lower()
@@ -56,6 +63,26 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
         extra_lines = []
         extra_keys = set()
 
+    if xmidata.orb != "hao":
+        extra_lines = without_orbital_options(extra_lines)
+        extra_keys = {ctrl_key(line) for line in extra_lines}
+    natoms = sum(bool(line.split("#", 1)[0].strip()) for line in xmidata.geo_section.splitlines())
+    orbtyp, orb_section = orbital_definition(xmidata.orb_section, xmidata.orb, xmidata.nao, natoms)
+
+    if xmidata.xmitype == "open":
+        # Enforce one solver and prevent passthrough settings from bypassing ISCF validation.
+        for line in extra_lines:
+            for value in re.findall(r"(?<!\S)iscf\s*=\s*(\S+)", line, re.IGNORECASE):
+                if not re.fullmatch(r"[+-]?\d+", value):
+                    raise ValueError("xmitype=open requires integer iscf=7, 8, or 9")
+                extra_iscf = resolve_xmi_iscf("open", int(value))
+                if extra_iscf != iscf:
+                    raise ValueError("Conflicting iscf in open XMI passthrough settings")
+        managed_options = re.compile(r"(?<!\S)(?:eigensolver|iscf)\s*=\s*\S+", re.IGNORECASE)
+        extra_lines = [managed_options.sub("", line).strip() for line in extra_lines]
+        extra_lines = [line for line in extra_lines if line]
+        extra_keys = {ctrl_key(line) for line in extra_lines}
+
     def is_nstr() -> bool:
         if xmi_passthrough and xmi_passthrough.str_section_text is not None:
             return True
@@ -69,21 +96,28 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
     else:
         str_line = f"str={xmidata.stru_type}"
 
+    charge_key = "charge" if xmidata.xmitype == "2026" else "ncharge"
+    int_type = xmidata.int_type
+    if xmidata.xmitype == "2026" and int_type.lower() == "libcint":
+        int_type = "exact"
+
     ctrl_lines = [
         f"{xmidata.method}",
         f"{str_line}",
         f"nao={xmidata.nao}",
         f"nae={xmidata.nae}",
-        f"ncharge={xmidata.ncharge}",
+        f"{charge_key}={xmidata.ncharge}",
         f"nmul={xmidata.nmul}",
-        f"iscf={xmidata.iscf}",
-        f"int={xmidata.int_type}",
+        f"iscf={iscf}",
+        f"int={int_type}",
         f"basis={xmidata.basis_set}",
     ]
+    if xmidata.xmitype == "open":
+        ctrl_lines.append("eigensolver=davidson")
 
     default_extra_lines = [
         "iprint=3",
-        "orbtyp=hao",
+        f"orbtyp={orbtyp}",
         "frgtyp=atom",
         "itmax=2000",
         "molden",
@@ -97,6 +131,8 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
 
     if xmidata.sort and "sort" not in extra_keys:
         ctrl_lines.append('sort')
+    if xmidata.xmitype == "2026":
+        ctrl_lines.extend(["&geo", xmidata.geo_section, "&end"])
     ctrl_text = "\n".join(ctrl_lines)
     
     xmi_text = f'''{xmidata.molecule_name} Created by autoVB {datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
@@ -105,9 +141,11 @@ $ctrl
 $end
 
 $orb
-{xmidata.orb_section}
+{orb_section}
 $end
-
+'''
+    if xmidata.xmitype != "2026":
+        xmi_text += f'''
 $geo
 {xmidata.geo_section}
 $end
@@ -359,7 +397,10 @@ def write_automr(
     from ..utils.utils import pyscf_to_xyz
     # automr要求内存至少为nproc的两倍，否则会阻止计算
     need_mem = 2 * int(nproc)
-    if int(mem[:-2]) < need_mem:
+    available_gb = int(mem[:-2])
+    if mem.upper().endswith("MB"):
+        available_gb /= 1024
+    if available_gb < need_mem:
         raise ValueError(f"GVB calculation requires at least {need_mem}GB memory(at least twice the number of processors). Please increase the memory allocation.")
     geometry_text = pyscf_to_xyz(mol)
     gaussian_basis = to_gaussian_basis_name(mol.basis)

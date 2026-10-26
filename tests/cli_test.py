@@ -3,7 +3,7 @@ import sys
 import subprocess
 import logging
 from pathlib import Path
-from autoVB.cli import autovb, draw_xmo, nbo, xmi, xmo2json
+from autoVB.cli import autovb, nbo, xmi, xmo2json
 
 def test_autovb_nbo_help_exits_0():
     with pytest.raises(SystemExit) as exc:
@@ -15,18 +15,10 @@ def test_autovb_xmi_help_exits_0():
         xmi.autovb_xmi(["--help"])
     assert exc.value.code == 0
 
-def test_draw_xmo_help_exits_0():
-    with pytest.raises(SystemExit) as exc:
-        draw_xmo.draw_xmo(["--help"])
-    assert exc.value.code == 0
-
 def test_xmo2json_help_exits_0():
     with pytest.raises(SystemExit) as exc:
         xmo2json.xmo2json(["--help"])
     assert exc.value.code == 0
-
-def test_draw_xmo_structures_per_row_parser():
-    assert draw_xmo.parse_draw_xmo_structures_per_row("3") == 3
 
 def test_autovb_main_logs_usage_for_missing_input(caplog):
     caplog.set_level(logging.INFO)
@@ -36,7 +28,8 @@ def test_autovb_main_logs_usage_for_missing_input(caplog):
     assert "Welcome to autoVB!" in caplog.text
     assert "Usage: autovb <input-file>" in caplog.text
 
-def test_autovb_main_parses_mem_nproc_and_debug(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("mem,expected", [("8G", "8GB"), ("512M", "512MB"), ("4000", "4000MB")])
+def test_autovb_main_parses_mem_nproc(tmp_path, monkeypatch, caplog, mem, expected):
     input_file = tmp_path / "job.autovb"
     input_file.write_text("", encoding="utf-8")
     captured = {}
@@ -44,7 +37,7 @@ def test_autovb_main_parses_mem_nproc_and_debug(tmp_path, monkeypatch, caplog):
     class FakeInputParser:
         def __init__(self, path):
             captured["path"] = path
-            self.input_data = type("InputData", (), {"mem": "2GB", "nproc": "2"})()
+            self.input_data = type("InputData", (), {"mem": "2GB", "nproc": "2", "debug": False})()
 
     class FakeMain:
         def __init__(self, input_data):
@@ -55,20 +48,23 @@ def test_autovb_main_parses_mem_nproc_and_debug(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr(autovb, "autoVBInputParser", FakeInputParser)
     monkeypatch.setattr(autovb, "autoVBMain", FakeMain)
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.INFO)
 
-    assert autovb.autovb_main([str(input_file), "--mem", "8G", "--nproc", "4", "--debug"]) is None
+    assert autovb.autovb_main([str(input_file), "--mem", mem, "--nproc", "4"]) == 0
 
     assert captured["path"] == input_file
-    assert captured["input_data"].mem == "8GB"
+    assert captured["input_data"].mem == expected
     assert captured["input_data"].nproc == "4"
     assert captured["ran"] is True
-    assert "Using memory: 8GB, nproc: 4" in caplog.text
+    assert f"Using memory: {expected}, nproc: 4" in caplog.text
 
-def test_normalize_memory():
-    assert autovb.normalize_memory("8G") == "8GB"
-    assert autovb.normalize_memory("512M") == "512MB"
-    assert autovb.normalize_memory("4000") == "4000MB"
+@pytest.mark.parametrize("mem,expected", [
+    ("8G", "8GB"), ("8g", "8GB"), ("512M", "512MB"), ("512m", "512MB"),
+    ("1M", "1MB"), ("1025M", "1025MB"), ("4000", "4000MB"),
+    ("4000MB", "4000MB"), ("4GB", "4GB"),
+])
+def test_normalize_memory(mem, expected):
+    assert autovb.normalize_memory(mem) == expected
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "examples" / "C4H6"

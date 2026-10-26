@@ -164,6 +164,8 @@ opt参数，暂未实现
 ##### 2.3.3.3 iscf=n
 配置 XMVB 轨道优化的方式。可选值包括 `2`, `5`, `6`。默认值为 `5`，具体含义参见 [XMVB 文档](https://xmvb.xmu.edu.cn/docs/xmvb/content.html#iscf-n)。
 
+当 `xmitype=open` 时，只接受整数 `7`、`8`、`9`，默认值为 `8`；显式提供其他值会抛出 `ValueError`。
+
 ##### 2.3.3.4 sort
 是否按照结构系数排序价键结构。
 
@@ -184,6 +186,40 @@ opt参数，暂未实现
 
 ##### 2.3.3.9 bovb_stream
 仅在使用 BOVB 方法时生效。开启后先以 `xxx_vb` 为文件名进行 VBSCF 计算，再使用 VBSCF 生成的 `.orb` 轨道初猜生成 `xxx_bovb.xmi` 并进行 BOVB 计算。当前仅解析第一阶段 VBSCF 并输出 `xxx_vb.json`；BOVB 的 `.xmo` 文件会正常保留，但暂不解析或生成 JSON 和 SVG。当同时设置 `novb` 时，该参数会被忽略。
+
+##### 2.3.3.10 xmitype=n
+字符串参数，选择输出的 XMI 类型，可选 `4`、`2026`、`open`，默认为 `4`。`4` 保持现有格式；`2026` 将坐标作为 `&geo ... &end` 内嵌在 `$ctrl` 中，总电荷使用 `charge=`，并将 `int=libcint` 输出为 `int=exact`。显式指定的 `exact`、`lr` 或其他积分值照常保留；其他控制项及透传选项不筛除，不额外检查目标程序的支持范围。`open` 默认使用 `iscf=8`，仅允许 `iscf=7/8/9`，并在 `$ctrl` 中自动写入唯一的 `eigensolver=davidson`。已有透传的求解器设置会被替换。此模式的 `iscf` 设置也用于 BLW 初猜和 BOVB 两阶段计算，不再由流程强制改为 `5` 或 `2`。`xmitype` 本身是 autoVB 参数，不作为 XMVB 关键字写出。
+
+```text
+autovb{xmitype=open}
+autovb{xmitype=open,iscf=9}
+autovb{xmitype=2026}
+```
+
+##### 2.3.3.11 orb=n
+选择轨道展开方式，字符串参数，默认为 `hao`。它与初猜来源 `guess` 分开设置，不改变已选择的活性空间、轨道编号或价键结构。
+
+| 值 | 轨道展开方式 | 计算流程 |
+| --- | --- | --- |
+| `hao` | 保留当前 HAO 定域范围 | 直接计算，默认行为不变 |
+| `mixed` | 非活性轨道在全体系展开，活性轨道保留原来的原子范围 | 直接计算，不增加 HAO 预计算 |
+| `oeo` | 所有轨道在全体系展开 | 先运行 HAO-VBSCF，再以其 `.orb` 作为初猜计算 OEO |
+| `oeo_direct` | 所有轨道在全体系展开 | 直接使用所选 `guess`，不增加 HAO 预计算 |
+
+`mixed` 写出 `orbtyp=hao`、`frgtyp=atom`，通过 `$orb` 扩展非活性轨道的原子范围；两个 OEO 模式写出 `orbtyp=oeo`，并给所有轨道提供全体系的 `$orb` 定义。显式选择 `mixed` 或 OEO 时，会替换透传的 `orbtyp`、`frgtyp`，其他控制选项照常保留。`orb` 本身不作为 XMVB 关键字写出。
+
+`orb=oeo` 使用 `xxx_vb_hao.xmi` 进行 HAO-VBSCF，随后读取 `xxx_vb_hao.orb` 并生成 `xxx_vb.xmi`。若检测到 HAO 未收敛则停止。与 `bovb_stream` 组合时，顺序为 HAO-VBSCF → OEO-VBSCF → OEO-BOVB；与 `guess=blw` 组合时，BLW 初猜计算位于这些阶段之前。`xmitype=open` 的 `iscf` 设置在 HAO 阶段继续保留，其他格式的 HAO 预计算使用 `iscf=5`。
+
+`orb=oeo,novb` 只准备 HAO 前置输入，不运行 HAO，也不生成依赖其收敛轨道的 OEO 输入。`guess=blw` 原有的 BLW 初猜计算行为不受此设置改变。OEO 结果可解析能量和轨道结构权重，但不提供轨道到单个原子的映射，因此自动原子连线绘图会跳过。
+
+```text
+autovb{orb=mixed}
+autovb{orb=oeo,xmitype=2026}
+autovb{orb=oeo_direct}
+autovb{orb=oeo,guess=blw,bovb_stream}
+```
+
+最后一个例子需配合 BOVB 方法；`bovb_stream` 仅对 BOVB 生效。
 
 #### 2.3.4 绘图相关
 
@@ -326,45 +362,73 @@ nbo2xmi C6H6.fch 6-31g* -aoa 1 3 5 7 9 11
 
 默认输出与输入同名的 `.xmi` 文件。
 
-### 3.4 `xmo2svg`
+### 3.4 `xmoview`（统一绘图入口）
 
-`xmo2svg` 读取 XMVB 的 `.xmo` 文件并生成 SVG 图像。通过 `--connectivity` 选择分子连接关系：默认使用 `.xmo` 中 `$orb` 部分的原子标签，适合过渡态、多个分子片段或需要保留 `$orb` 成键关系的体系；设置为 `rdkit` 时使用 RDKit 推断普通分子键连关系。
-
-```bash
-xmo2svg <xmo-file> [--connectivity {orb,rdkit}] [options]
-```
-
-参数：
-
-- `--connectivity {orb,rdkit}`：选择连接关系来源，默认值为 `orb`。`orb` 使用 `$orb` 标签，`rdkit` 使用 RDKit 键连推断。
-- `-w`、`--weight {lowdin,cc,inverse,renormalized,both}`：选择显示和排序的权重，默认值为 `lowdin`；`both` 同时显示 CC 和 Lowdin 权重。
-- `-m`、`--max-structures {N,all}`：最多绘制的结构数，默认值为 `20`；使用 `all` 绘制全部结构。
-- `--baseline-index N`：指定基准结构编号，默认使用最高权重结构。
-- `--charge CHARGE`：RDKit 判断键级时使用的总电荷，默认值为 `0`。
-- `--projection {rdkit,pca,optimized3d,contact}`：选择原子排布方式，默认值为 `rdkit`。`pca` 和 `optimized3d` 使用输入三维坐标投影，`contact` 适合包含多个分子片段的体系。
-- `--show-hydrogens`：显示氢原子；默认隐藏氢原子。
-- `--no-condensed-hydrogens`：关闭杂原子或孤立碳的紧凑氢原子显示。
-- `--write-individual-svgs`：除网格图外，为每个价键结构单独写出 SVG。
-- `-n`、`--structures-per-row N`：网格图每行的结构数，默认值为 `2`。
-- `--hide-atom-labels`：隐藏原子编号。
-- `--hide-connection-labels`：隐藏结构权重后面的成键原子对和自由基标记。
-- `--hide-lone-pairs`：隐藏孤对电子标记。
-
-例如：
+`xmoview` 读取已有 XMVB `.xmo` 文件，选择价键结构并输出二维 SVG、三维 PNG 或可旋转的离线 HTML，不运行化学计算。
 
 ```bash
-xmo2svg C6H6_vb.xmo --connectivity rdkit
-xmo2svg R24_vb.xmo --projection optimized3d --weight both
-xmo2svg mens_vb.xmo --projection contact --hide-connection-labels
+xmoview molecule.xmo                         # molecule.svg
+xmoview molecule.xmo -f png                  # molecule.png
+xmo2html molecule.xmo                        # molecule.html，等价于 xmoview molecule.xmo -f html
+xmoview molecule.xmo -o figures/result.svg   # 自定义路径，按后缀选择格式
 ```
 
-输出 SVG 文件与 `.xmo` 文件同名，扩展名为 `.svg`；使用 `--write-individual-svgs` 时还会输出各结构对应的单独 SVG 文件。
+`draw_xmo`、`xmo2svg` 是相同功能的别名；`xmo2png` 使用同一入口，默认格式为 PNG；`xmo2html` 默认格式为 HTML，等价于 `xmoview -f html`。所有入口接受相同参数。未提供输出后缀和 `-f` 时使用入口的默认格式；两者同时提供且不一致时报错。
 
-`draw_xmo` 是 `xmo2svg` 的别名，所有参数、默认值、连接模式和输出文件名均完全一致：
+**共用参数：**
+
+| 参数 | 功能和默认值 |
+| --- | --- |
+| `-f, --format {svg,png,html}` | 输出格式；未指定时由 `-o` 后缀决定 |
+| `-o, --output PATH` | 自定义输出路径；默认沿用输入文件名并替换后缀 |
+| `-m, --max-structures N/all` | 默认前六个结构；`all` 按权重排序展示全部 |
+| `--indices 12,35,80` | 指定 XMO 原始结构编号，保留给定顺序；与显式 `-m` 互斥 |
+| `-w, --weight {both,lowdin,cc,inverse,renormalized}` | 默认 `both`：按 Löwdin 排序，同时显示 CC 和 Löwdin 权重 |
+| `--baseline-index N` | 电荷变化的参考结构编号；默认当前权重表中的最高权重结构，与展示顺序独立 |
+| `-n, --structures-per-row N` | SVG/PNG 每行结构数，默认 3；不适用于 HTML |
+| `--panel-size N` | SVG/PNG 每个面板的边长，至少 128；SVG 默认原有矩形尺寸，PNG 默认 640 像素 |
+| `--show-hydrogens / --hide-hydrogens` | SVG 默认隐藏普通氢，PNG/HTML 默认显示全部氢；可显式覆盖，活性氢保留（SVG 含活性氢时会保留全部氢以维持映射） |
+| `--show-atom-labels` | 默认隐藏原子编号，开启后使用原始几何编号 |
+| `--show-connection-labels` | 默认隐藏图例中的配对和自由基原子编号 |
+| `--hide-lone-pairs` | 隐藏默认显示的活性孤对电子标记；这些标记不代表全部非活性孤对 |
+| `--hide-charges` | 隐藏默认显示的相对电荷变化；这些标记不是绝对形式电荷或部分电荷 |
+| `--circle-charges` | 为电荷变化文字添加圆圈，默认关闭；支持 SVG/PNG/HTML，`2−` 等完整标记使用一个圆圈 |
+| `--transparent-background` | SVG/PNG 透明背景，不适用于 HTML |
+
+电荷变化标记使用完整减号 `−`，默认字号相比原先增大约 50% 并加粗。`--circle-charges` 只增加电荷标记的圆圈，不改变原子、孤对电子点和结构权重；`--hide-charges` 会同时隐藏电荷文字及其圆圈。
+
+**SVG 专属参数：**
+
+- `--connectivity {orb,rdkit}`：默认 `orb`，使用 `$orb` 原子标签；`rdkit` 根据几何推断连接关系及键级。
+- `--charge N`：键级推断时使用的体系总电荷，默认 0，与电荷标记开关无关。
+- `--layout {rdkit,pca,optimized3d,contact}`：默认 `rdkit`；其余选项分别使用 PCA 投影、优化三维投影、跨片段接触布局。当前 `--connectivity rdkit` 仅支持 `--layout rdkit`，其他组合报错。
+- `--condense-hydrogens / --no-condense-hydrogens`：默认开启紧凑 NH₂ 等标签；旧写法 `--no-condensed-hydrogens` 仍可用。
+- `--write-individual`：除总图外另存每个结构的 SVG；旧写法 `--write-individual-svgs` 仍可用。
+
+**PNG/HTML 专属参数：**
+
+- `--view {pca,optimized3d}`：默认 `optimized3d`；决定初始相机，不改变原始三维坐标。
+- `--color-scheme {element,highlight}`：默认 `element`，保留原有元素配色。`highlight` 将骨架键统一设为浅灰色 `#C8CDD3`，活性配对实线/虚线、孤对/单电子圆点和电荷变化标记设为亮红色 `#FF3030`；原子球保留元素颜色，线宽和几何不变。仅适用于 PNG/HTML，所有命令别名均可使用。
+
+- `--azimuth`、`--elevation`：手动相机角度，覆盖自动视角搜索；未指定的另一角度使用 35°/55° 中对应的默认值。
+- `--hide-legend`：隐藏默认显示的原子颜色图例，保留结构权重。PNG 在整张网格图底部显示一份图例，HTML 在右上角显示一份；只列出实际可见的元素，颜色与原子球一致。隐藏的氢不列入，保留的活性氢仍列入。图例仅解释原子元素，不包含键、电子标记或电荷说明；SVG 不生成图例。
 
 ```bash
-draw_xmo <xmo-file> [options]
+xmo2png molecule.xmo --color-scheme highlight
+xmo2html molecule.xmo --color-scheme highlight
 ```
+
+
+旧参数 `--projection` 继续有效：SVG 下等价于 `--layout`，PNG/HTML 下等价于 `--view`。与新参数同时传入不一致值会报错。显式传入不适用的参数也会报错，例如对 PNG 使用 `--charge`，或对 HTML 使用 `-n`。
+
+```bash
+xmoview R24_vb.xmo --layout optimized3d
+xmoview mens_vb.xmo --layout contact
+xmoview molecule.xmo -f png --view optimized3d
+xmoview molecule.xmo -f html --indices 12,35
+```
+
+命令行默认值现在统一：前六个结构、`both` 权重、每行三个面板、隐藏原子编号和连接说明。氢原子按格式设置默认值：SVG 隐藏普通氢，PNG/HTML 显示全部氢。原先 SVG 命令默认的 20 个结构、Löwdin 单表和显示标签需要显式指定；原先 PNG 的 `_3d` 文件名后缀不再自动添加。这些变更不改变 `.autovb` 中的 `xmo2svg`/`draw_xmo` 工作流设置。
 
 ### 3.5 `fch2vb`
 
@@ -432,13 +496,43 @@ xmo2xmi C6H6_vb.xmi
 xmo2xmi C6H6_vb.xmi --method bovb --iscf 5 -o C6H6_bovb.xmi
 ```
 
-### 3.8 命令选择建议
+### 3.8 `xmoview -f png/html`（PyVista 三维图）
+
+可选安装：在源码目录执行 `pip install -e '.[visualization]'`。随后可以用 PyVista 将已有 XMO 中的结构绘制为具有光照和遮挡效果的球棍 PNG，不运行化学计算。
+
+```bash
+xmoview C6H5NH2_nbo_vb.xmo -f png -w both -m 3 -n 3
+xmoview C6H5NH2_nbo_vb.xmo -f png --view optimized3d -w both -m 3 -n 3
+xmoview C6H5NH2_nbo_vb.xmo -f png -m 1 --show-atom-labels --transparent-background -o aniline.png
+# 未重新安装命令入口时，也可使用 python -m autoVB.cli.xmoview ...
+```
+
+- 默认输出 `<原文件名>.png`，前六个结构按 Löwdin 权重排序，每行三个；`-w both` 同时显示 CC/Löwdin。
+- `--view {pca,optimized3d}` 选择相机方式，默认 `optimized3d`。显式选择 `pca` 时使用 PCA 主平面上的 35° 方位角、55° 仰角。`optimized3d` 参考 SVG 的视角评分搜索方向，减少键压缩、原子/片段重叠、键交叉和电子标记遮挡；兼顾适度倾斜，所有结构共用一个视角。原始三维坐标保持不变。
+- `--panel-size` 设置每格像素边长，默认 640。显式设置 `--azimuth` 或 `--elevation` 时优先使用手动相机并跳过自动搜索；未指定的另一个角度使用 35°/55° 中对应的默认值。
+- 默认显示全部氢原子；`--hide-hydrogens` 隐藏普通氢，保留参与活性电子分布的氢。`--show-atom-labels` 使用原始 `$geo` 编号，`--show-connection-labels` 显示配对编号。
+- `--baseline-index N` 指定电荷变化的参考结构，默认使用权重最高的结构；`--hide-charges` 可独立隐藏电荷标记，不受原子编号开关影响。多一个电子显示 `−`，少一个电子显示 `+`，两个电子的变化显示 `2−`/`2+`。
+- 保留原始三维坐标，从 `$orb` 单/双中心原子标签构建骨架。红线表示活性电子配对，自配对显示两个红点，未成对电子显示一个红点，跨越骨架的非局域配对使用虚线弧。这些标记是示意，不是轨道等值面；默认显示与 SVG 相同规则的电荷变化标记，表示相对参考结构的电子重新分配，不是绝对形式电荷或部分电荷。
+- 离屏渲染仍需要可用的 OpenGL 后端。无显示节点应配置 EGL 或 OSMesa；可在独立 Conda 环境安装 Mesa 软件渲染库，再运行 Python。图形库的加载路径应在运行环境中设置，不写入 Gaussian/autoVB 的计算配置。
+
+苯胺示例使用既有 `C6H5NH2_nbo_vb.xmo`，实际选择结构 17、20、18。蓝球为 N，深灰球为 C，浅灰球为 H；第三个结构包含跨环配对。
+
+导出可旋转的独立 HTML：
+
+```bash
+pip install -e '.[visualization-html]'
+xmoview C6H5NH2_nbo_vb.xmo -f html --view optimized3d -w both -m 6 -o aniline.html
+```
+
+将 HTML 文件用支持 WebGL 的浏览器打开即可旋转、缩放和平移，无需启动 Python 服务或下载外部脚本。使用顶部 `Rank 1`、`Rank 2` 等标签切换结构，每次显示一个结构，并保留各自的旋转和缩放状态；点击 `Reset view` 恢复当前结构的初始视角。HTML 始终使用单结构视图，显式传入 `-n` 会报错；网格排布仅用于 SVG/PNG。结构编号、权重、原子标签和电荷标记由浏览器文字层保留；电荷文字随原子移动并始终面向屏幕。`--hide-charges`、`--show-atom-labels` 同样适用，透明背景选项适用于 SVG/PNG。
+
+### 3.9 命令选择建议
 
 - 从分子坐标开始进行完整自动计算：使用 `autovb`。
 - 只生成 Gaussian NBO 输入文件：使用 `xyz2nbo`。
 - 已有 `.fch`/`.chk`，只想生成 XMVB `.xmi`：使用 `nbo2xmi`。
 - 已有 `.fch`，只想转换为最小 XMVB 初猜：使用 `fch2vb`。
-- 已有 `.xmo`，需要绘图：使用 `xmo2svg`。
+- 已有 `.xmo`，需要绘图：使用 `xmoview`。
 - 已有 `.xmo`，需要批量提取结果：使用 `xmo2json`。
 - 需要用 `.orb` 替换 `.xmi` 初猜：使用 `xmo2xmi`。
 

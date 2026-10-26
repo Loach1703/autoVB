@@ -39,6 +39,40 @@ def read_xmi_and_orb(
     )
 
 
+def read_xmvb_orbital_matrix(
+    orb_file: str | Path,
+    n_orbitals: int,
+    n_basis: int,
+) -> np.ndarray:
+    """读取 XMVB ``.orb`` 文件并补成 MO x AO 的稠密轨道矩阵。"""
+    lines = Path(orb_file).read_text(errors="ignore").splitlines()
+    tokens = [
+        token
+        for line in lines
+        for token in line.split("#", 1)[0].split()
+    ]
+    orbital_sizes = [int(token) for token in tokens[:n_orbitals]]
+    orbital_tokens = tokens[n_orbitals:]
+    orbital_matrix = np.zeros((n_orbitals, n_basis))
+
+    cursor = 0
+    for orbital_index, orbital_size in enumerate(orbital_sizes):
+        for _ in range(orbital_size):
+            coefficient = float(orbital_tokens[cursor].replace("D", "E"))
+            basis_index = int(orbital_tokens[cursor + 1]) - 1
+            orbital_matrix[orbital_index, basis_index] = coefficient
+            cursor += 2
+
+    logger.info(
+        "Read XMVB ORB header from %s: %s orbitals, %s listed coefficients.",
+        orb_file,
+        len(orbital_sizes),
+        sum(orbital_sizes),
+    )
+    logger.info("Assembled BLW orbital matrix with shape %s.", orbital_matrix.shape)
+    return orbital_matrix
+
+
 class autoVBInputParser:
     '''
     解析输入文件，提取必要的信息，如分子结构、基组、计算参数等
@@ -118,6 +152,7 @@ class autoVBInputParser:
                 i += 1
 
         settings = VBSettings()
+        settings.iscf = None  # Resolve the default after xmitype and explicit options are parsed.
         type_hints = get_type_hints(VBSettings)
         alias_map = {
             "int": "inte",
@@ -161,6 +196,8 @@ class autoVBInputParser:
                         parsed_value = self.parse_value_by_type(value, target_type, mapped_key)
                         setattr(settings, mapped_key, parsed_value)
                     except Exception as e:
+                        if mapped_key in ("xmitype", "iscf"):
+                            raise ValueError(f"Invalid {mapped_key}: {value}") from e
                         logger.warning(f"failed to parse $ctrl key '{key}' with value '{value}': {e}")
                     continue
 
@@ -183,6 +220,8 @@ class autoVBInputParser:
                     parsed_value = self.parse_value_by_type(True, target_type, mapped_key)
                     setattr(settings, mapped_key, parsed_value)
                 except Exception as e:
+                    if mapped_key in ("xmitype", "iscf"):
+                        raise ValueError(f"Invalid {mapped_key}: {s}") from e
                     logger.warning(f"failed to parse flag field '{s}' in $ctrl: {e}")
             else:
                 passthrough.ctrl_extra_lines.append(token)
@@ -282,6 +321,10 @@ class autoVBInputParser:
     def parse_value_by_type(self, raw: str, target_type, key: str):
         if isinstance(raw, str):
             raw = raw.strip()
+        if key == "iscf":
+            if not isinstance(raw, str) or not re.fullmatch(r"[+-]?\d+", raw):
+                raise ValueError("iscf must be an integer")
+            return int(raw)
         origin = get_origin(target_type)
         logger.debug(f"Parsing value for key '{key}': raw='{raw}', target_type={target_type}, origin={origin}")
         if get_origin(target_type) == Union:
@@ -339,12 +382,15 @@ class autoVBInputParser:
         """
         m = re.search(r"\{([^}]*)\}", s, re.DOTALL)
         if not m:
-            return VBSettings()  # 无选项，返回默认
+            settings = VBSettings()
+            settings.validate()
+            return settings
 
         inner = m.group(1)
         pattern = r'\s*(?:\([^()]*\)|[^,])+\s*'
         pair_list: list[str] = [p.strip() for p in re.findall(pattern, inner) if p.strip()]
         settings = VBSettings()
+        settings.iscf = None  # Resolve the default after xmitype and explicit options are parsed.
         type_hints = get_type_hints(VBSettings)
         alias_map = {
             "int": "inte",
@@ -376,6 +422,8 @@ class autoVBInputParser:
                 setattr(settings, key, parsed_value)
                 # logger.debug(f"Set VBSettings.{key} = {parsed_value} (parsed from '{value}')")
             except Exception as e:
+                if key in ("xmitype", "iscf"):
+                    raise ValueError(f"Invalid {key}: {value}") from e
                 logger.warning(f"failed to parse value for key '{key}' with raw value '{value}'. Error: {e}. Skipping this option.")
                 continue
 

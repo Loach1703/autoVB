@@ -11,6 +11,9 @@ from rdkit import Chem
 from rdkit.Chem import rdDepictor, rdDetermineBonds
 from rdkit.Chem.Draw import rdMolDraw2D
 
+from .electron_distribution import charge_note_from_delta, charge_notes, electron_counts
+from .charge_annotations import CHARGE_STROKE_RATIO
+
 
 @dataclass
 class ValenceBondStructureInfo:
@@ -70,7 +73,7 @@ class MoleculeBondVariantDrawer:
     DEFAULT_CHARGE_NOTE_SCALE = 1.2
     DEFAULT_ATOM_LABEL_COLOR = "#000000"
     DEFAULT_ATOM_LABEL_FONT_SIZE = 12.0
-    DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 22.0
+    DEFAULT_CHARGE_LABEL_BASE_FONT_SIZE = 33.0
     DEFAULT_LEGEND_MIN_FONT_SIZE = 16
     DEFAULT_LEGEND_MAX_FONT_SIZE = 40
     DEFAULT_LEGEND_LINE_GAP = 6.0
@@ -126,6 +129,10 @@ class MoleculeBondVariantDrawer:
         lone_pair_dot_radius: float | None = None,
         write_individual_svgs: bool = False,
         structures_per_row: int = 2,
+        show_charges: bool = True,
+        circle_charges: bool = False,
+        transparent_background: bool = False,
+        panel_size: int | None = None,
     ) -> None:
         """初始化绘图器。
 
@@ -194,6 +201,10 @@ class MoleculeBondVariantDrawer:
         )
         self.write_individual_svgs = write_individual_svgs
         self.structures_per_row = structures_per_row
+        self.show_charges = show_charges
+        self.circle_charges = circle_charges
+        self.transparent_background = transparent_background
+        self.panel_size = panel_size
 
     @staticmethod
     def _copy_atom_groups(atom_groups: Sequence[Sequence[int]]) -> list[list[int]]:
@@ -485,7 +496,8 @@ class MoleculeBondVariantDrawer:
         Returns:
             SVG 文本。
         """
-        return self._draw_molecule_svg(mol, legend, upgraded_bond_counts, 620, 460)
+        width, height = (self.panel_size, self.panel_size) if self.panel_size else (620, 460)
+        return self._draw_molecule_svg(mol, legend, upgraded_bond_counts, width, height)
 
     def draw_grid_svg(
         self,
@@ -503,8 +515,8 @@ class MoleculeBondVariantDrawer:
         Returns:
             包含所有子图的 SVG 文本。
         """
-        sub_img_width = 520
-        sub_img_height = 390
+        sub_img_width = self.panel_size or 520
+        sub_img_height = self.panel_size or 390
         # 左右间距
         column_gap = 100
         mols_per_row = self.structures_per_row
@@ -516,7 +528,7 @@ class MoleculeBondVariantDrawer:
         grid_height = sub_img_height * row_count
 
         parts = [
-            "<?xml version='1.0' encoding='iso-8859-1'?>\n",
+            "<?xml version='1.0' encoding='UTF-8'?>\n",
             "<svg version='1.1' baseProfile='full'\n",
             "              xmlns='http://www.w3.org/2000/svg'\n",
             "                      xmlns:rdkit='http://www.rdkit.org/xml'\n",
@@ -528,6 +540,7 @@ class MoleculeBondVariantDrawer:
             (
                 "<rect style='opacity:1.0;fill:#FFFFFF;stroke:none' "
                 "width='100%' height='100%' x='0' y='0'> </rect>\n"
+                if not self.transparent_background else ""
             ),
         ]
 
@@ -573,7 +586,11 @@ class MoleculeBondVariantDrawer:
             已完成键高亮、原子编号、电荷和孤对电子标注的 SVG 文本。
         """
         drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
+        # RDKit's glyph renderer treats UTF-8 ö as two unsupported bytes.
+        # Render its base glyph and add the diaeresis as SVG vector dots.
+        rendered_legend = legend.replace("ö", "o")
         draw_options = drawer.drawOptions()
+        draw_options.clearBackground = not self.transparent_background
         draw_options.legendFontSize = self._legend_font_size(legend, width, height)
         draw_options.legendFraction = 0.1 * max(len(legend.splitlines()), 1)
         for atom in mol.GetAtoms():
@@ -581,12 +598,15 @@ class MoleculeBondVariantDrawer:
                 draw_options.atomLabels[atom.GetIdx()] = atom.GetProp(
                     self.CONDENSED_ATOM_LABEL_PROP
                 )
-        drawer.DrawMolecule(mol, legend=legend)
+        drawer.DrawMolecule(mol, legend=rendered_legend)
         atom_coords = self._atom_draw_coords(drawer, mol)
         drawer.FinishDrawing()
 
-        svg = drawer.GetDrawingText()
-        svg = self._increase_multiline_legend_spacing(svg, legend, width, height)
+        svg = drawer.GetDrawingText().replace("encoding='iso-8859-1'", "encoding='UTF-8'")
+        svg = self._increase_multiline_legend_spacing(
+            svg, rendered_legend, width, height
+        )
+        svg = self._add_legend_diacritics(svg, legend)
         if self.color_active_space:
             svg = self._color_upgraded_bond_lines_in_svg(
                 svg,
@@ -740,10 +760,19 @@ class MoleculeBondVariantDrawer:
                 charge_label_bboxes,
             )
             charge_label_bboxes.append(charge_bbox)
+            if self.circle_charges:
+                x_pos, y_pos = charge_position
+                stroke_width = charge_font_size * CHARGE_STROKE_RATIO
+                radius = (charge_bbox[2] - charge_bbox[0] - stroke_width) / 2
+                annotation_parts.append(
+                    f"<circle class='charge-circle atom-{atom_idx}' "
+                    f"cx='{x_pos:.1f}' cy='{y_pos:.1f}' r='{radius:.1f}' "
+                    f"fill='none' stroke='{self.active_space_color}' stroke-width='{stroke_width:.2f}'/>\n"
+                )
             annotation_parts.append(
                 self._svg_text_label(
                     css_class=f"charge-label atom-{atom_idx}",
-                    text=note,
+                    text=note.replace("-", "−"),
                     position=charge_position,
                     color=self.active_space_color,
                     font_size=charge_font_size,
@@ -778,6 +807,51 @@ class MoleculeBondVariantDrawer:
                 min(max_font_size, estimated_size),
             )
         )
+
+    @staticmethod
+    def _add_legend_diacritics(svg: str, legend: str) -> str:
+        """为 Löwdin 的 o 字形补上变音符号，保留 RDKit 图例排版。"""
+        if "ö" not in legend:
+            return svg
+
+        paths = list(
+            re.finditer(r"<path\b(?=[^>]*\bclass='legend')[^>]*/>", svg)
+        )
+        replacements = []
+        for index, character in enumerate(legend.replace("\n", "")):
+            if character != "ö" or index >= len(paths):
+                continue
+            match = paths[index]
+            path = match.group(0)
+            data = re.search(r"\bd='([^']*)'", path)
+            if data is None:
+                continue
+            values = [
+                float(value)
+                for value in re.findall(r"-?\d+(?:\.\d+)?", data.group(1))
+            ]
+            if len(values) < 4:
+                continue
+            xs, ys = values[::2], values[1::2]
+            left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
+            radius = min(right - left, bottom - top) * 0.08
+            y = top - 2.5 * radius
+            transform = re.search(r"\btransform='([^']*)'", path)
+            transform_attr = f" transform='{transform.group(1)}'" if transform else ""
+            dots = (
+                f"<g class='legend-diacritic'{transform_attr}>"
+                "<title>Löwdin</title>"
+                + "".join(
+                    f"<circle cx='{left + fraction * (right - left):.2f}' "
+                    f"cy='{y:.2f}' r='{radius:.2f}' fill='#000000' stroke='none'/>"
+                    for fraction in (0.3, 0.7)
+                )
+                + "</g>"
+            )
+            replacements.append((match.end(), dots))
+        for position, dots in reversed(replacements):
+            svg = svg[:position] + dots + svg[position:]
+        return svg
 
     @classmethod
     def _increase_multiline_legend_spacing(
@@ -1227,6 +1301,8 @@ class MoleculeBondVariantDrawer:
             len(note) * font_size * self.CHARGE_LABEL_TEXT_WIDTH_FACTOR,
         )
         text_height = font_size
+        if self.circle_charges:
+            text_width = text_height = max(text_width, text_height) + 0.3 * font_size
         obstacles = list(svg_obstacle_bboxes) + list(charge_bboxes)
         preferred_position = self._label_position(
             atom_coord,
@@ -1236,6 +1312,10 @@ class MoleculeBondVariantDrawer:
             width,
             height,
         )
+        if self.circle_charges:
+            preferred_position = self._bounded_text_position(
+                *preferred_position, text_width, text_height, width, height,
+            )
         preferred_bbox = self._text_bbox(
             preferred_position,
             text_width,
@@ -1884,29 +1964,11 @@ class MoleculeBondVariantDrawer:
         Returns:
             0-based 原子索引到电荷符号的映射。
         """
-        expected_counts = self._expected_electron_counts()
-
-        actual_counts = {atom_number: 0 for atom_number in expected_counts}
-        for begin_atom, end_atom in valence_bond_structure.bond_pairs:
-            actual_counts.setdefault(begin_atom, 0)
-            actual_counts.setdefault(end_atom, 0)
-            if begin_atom in actual_counts:
-                actual_counts[begin_atom] += 1
-            if end_atom in actual_counts:
-                actual_counts[end_atom] += 1
-        for atom_number in valence_bond_structure.unpaired_atoms:
-            actual_counts[atom_number] = actual_counts.get(atom_number, 0) + 1
-
-        charge_notes: dict[int, str] = {}
-        atom_numbers = sorted(set(expected_counts) | set(actual_counts))
-        for atom_number in atom_numbers:
-            expected_count = expected_counts.get(atom_number, 0)
-            delta = actual_counts.get(atom_number, 0) - expected_count
-            note = self._charge_note_from_delta(delta)
-            if note:
-                charge_notes[atom_number - 1] = note
-
-        return charge_notes
+        return charge_notes(
+            self._expected_electron_counts(),
+            valence_bond_structure.bond_pairs,
+            valence_bond_structure.unpaired_atoms,
+        )
 
     def _neutral_self_pair_counts_from_valence_structure(
         self,
@@ -1952,14 +2014,7 @@ class MoleculeBondVariantDrawer:
         Returns:
             1-based 原子编号到原始电子数的映射。
         """
-        expected_counts: dict[int, int] = {}
-        for atom_group in self.active_bond_atom:
-            for atom_number in atom_group:
-                expected_counts[atom_number] = expected_counts.get(atom_number, 0) + 1
-        for atom_number in self.baseline_unpaired_atoms or []:
-            expected_counts[atom_number] = expected_counts.get(atom_number, 0) + 1
-
-        return expected_counts
+        return electron_counts(self.active_bond_atom, self.baseline_unpaired_atoms or [])
 
     @staticmethod
     def _charge_note_from_delta(delta: int) -> str:
@@ -1971,12 +2026,7 @@ class MoleculeBondVariantDrawer:
         Returns:
             电荷标签文本，例如 `"+"`、`"-"`、`"2+"`；无差异返回空字符串。
         """
-        if delta > 0:
-            return "-" if delta == 1 else f"{delta}-"
-        if delta < 0:
-            missing_count = abs(delta)
-            return "+" if missing_count == 1 else f"{missing_count}+"
-        return ""
+        return charge_note_from_delta(delta)
 
     def _apply_charge_note_props(
         self,
@@ -1996,7 +2046,7 @@ class MoleculeBondVariantDrawer:
             atom_idx = atom.GetIdx()
             if atom.HasProp(self.CHARGE_NOTE_PROP):
                 atom.ClearProp(self.CHARGE_NOTE_PROP)
-            if atom_idx in charge_notes:
+            if self.show_charges and atom_idx in charge_notes:
                 atom.SetProp(self.CHARGE_NOTE_PROP, charge_notes[atom_idx])
 
     def _apply_lone_pair_count_props(

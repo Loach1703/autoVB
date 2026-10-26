@@ -58,6 +58,12 @@ def xmo2svg_file(
     condense_hydrogens: bool = True,
     show_connection_labels: bool = True,
     rename_grid: bool = True,
+    output: str | Path | None = None,
+    indices: list[int] | None = None,
+    show_charges: bool = True,
+    circle_charges: bool = False,
+    transparent_background: bool = False,
+    panel_size: int | None = None,
 ) -> Xmo2SvgResult:
     """读取 XMO 并按指定连接关系生成价键结构 SVG。"""
     from ..draw_xmo.molecule_bond_variant_drawer import MoleculeBondVariantDrawer
@@ -73,7 +79,10 @@ def xmo2svg_file(
     if not xmo_path.is_file():
         raise ValueError(f"XMO path is not a file: {xmo_path}")
 
-    output_dir = xmo_path.parent
+    output_path = Path(output) if output is not None else xmo_path.with_suffix(".svg")
+    if output_path.suffix.lower() != ".svg":
+        raise ValueError("SVG output must use the .svg extension")
+    output_dir = output_path.parent
     parsed_data = XmoParser(xmo_path).parse()
     converter = XmoToDrawerInputConverter(
         parsed_data,
@@ -83,6 +92,7 @@ def xmo2svg_file(
         baseline_index=baseline_index,
         weight_table=weight_table,
         show_connection_labels=show_connection_labels,
+        indices=indices,
     )
     drawer_input = converter.convert()
     hide_hydrogens = converter.hide_hydrogens
@@ -102,6 +112,10 @@ def xmo2svg_file(
         show_lone_pairs=show_lone_pairs,
         write_individual_svgs=write_individual_svgs,
         structures_per_row=structures_per_row,
+        show_charges=show_charges,
+        circle_charges=circle_charges,
+        transparent_background=transparent_background,
+        panel_size=panel_size,
     )
     if connectivity == "orb":
         drawer = OrbitalConnectivityMoleculeDrawer(
@@ -116,9 +130,8 @@ def xmo2svg_file(
         raise ValueError(f"Unsupported connectivity mode: {connectivity}")
 
     draw_result = drawer.draw()
-    if rename_grid:
+    if rename_grid or output is not None:
         grid_path = output_dir / f"{xmo_path.stem}_grid.svg"
-        output_path = output_dir / f"{xmo_path.stem}.svg"
         grid_path.replace(output_path)
         draw_result.written_files = [
             output_path if written_file == grid_path else written_file
