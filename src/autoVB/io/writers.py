@@ -37,7 +37,8 @@ class XMIData:
 def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthrough'= None):
     '''
     将 XMIData 数据格式写入 .xmi 文件。
-    xmitype 为 '4'/'2026' 时沿用原格式；'open' 仅接受 iscf=7/8/9，默认 8，固定 Davidson 求解器。
+    '2026' 使用 CTRL 内嵌 GEO、charge 和 exact 积分名称；'4' 保留原格式。
+    'open' 仅接受 iscf=7/8/9，默认 8，固定 Davidson 求解器。
     Args:
         filename (str): 输出文件名
         xmidata (XMIData): 包含轨道数据和相关信息的对象
@@ -87,15 +88,20 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
     else:
         str_line = f"str={xmidata.stru_type}"
 
+    charge_key = "charge" if xmidata.xmitype == "2026" else "ncharge"
+    int_type = xmidata.int_type
+    if xmidata.xmitype == "2026" and int_type.lower() == "libcint":
+        int_type = "exact"
+
     ctrl_lines = [
         f"{xmidata.method}",
         f"{str_line}",
         f"nao={xmidata.nao}",
         f"nae={xmidata.nae}",
-        f"ncharge={xmidata.ncharge}",
+        f"{charge_key}={xmidata.ncharge}",
         f"nmul={xmidata.nmul}",
         f"iscf={iscf}",
-        f"int={xmidata.int_type}",
+        f"int={int_type}",
         f"basis={xmidata.basis_set}",
     ]
     if xmidata.xmitype == "open":
@@ -117,6 +123,8 @@ def write_xmi_file(filename: str, xmidata: XMIData, xmi_passthrough: 'XMIPassthr
 
     if xmidata.sort and "sort" not in extra_keys:
         ctrl_lines.append('sort')
+    if xmidata.xmitype == "2026":
+        ctrl_lines.extend(["&geo", xmidata.geo_section, "&end"])
     ctrl_text = "\n".join(ctrl_lines)
     
     xmi_text = f'''{xmidata.molecule_name} Created by autoVB {datetime.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}
@@ -127,7 +135,9 @@ $end
 $orb
 {xmidata.orb_section}
 $end
-
+'''
+    if xmidata.xmitype != "2026":
+        xmi_text += f'''
 $geo
 {xmidata.geo_section}
 $end

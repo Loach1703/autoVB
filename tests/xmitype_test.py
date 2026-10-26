@@ -35,10 +35,14 @@ def test_output_defaults_and_legacy_format(tmp_path, xmitype, expected):
     assert f"iscf={expected}\n" in text
     assert ("eigensolver=davidson\n" in text) == (xmitype == "open")
     assert "xmitype=" not in text  # This is an autoVB setting, not an XMVB keyword.
-    if xmitype != "open":
-        legacy = tmp_path / "legacy.xmi"
-        write_xmi_file(legacy, xmi_data())
-        assert text.splitlines()[1:] == legacy.read_text().splitlines()[1:]
+    if xmitype == "2026":
+        ctrl = text.split("$ctrl\n", 1)[1].split("$end", 1)[0]
+        assert "&geo\nH 0 0 0\nH 0 0 0.74\n&end\n" in ctrl
+        assert "\ncharge=0\n" in ctrl and "\nint=exact\n" in ctrl
+        assert "ncharge=" not in text and "$geo" not in text
+    else:
+        assert "\nncharge=0\n" in text and "\nint=libcint\n" in text
+        assert "$geo\nH 0 0 0\nH 0 0 0.74\n$end" in text
 
 
 @pytest.mark.parametrize("iscf", [7, 8, 9])

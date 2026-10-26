@@ -188,7 +188,7 @@ opt参数，暂未实现
 仅在使用 BOVB 方法时生效。开启后先以 `xxx_vb` 为文件名进行 VBSCF 计算，再使用 VBSCF 生成的 `.orb` 轨道初猜生成 `xxx_bovb.xmi` 并进行 BOVB 计算。当前仅解析第一阶段 VBSCF 并输出 `xxx_vb.json`；BOVB 的 `.xmo` 文件会正常保留，但暂不解析或生成 JSON 和 SVG。当同时设置 `novb` 时，该参数会被忽略。
 
 ##### 2.3.3.10 xmitype=n
-字符串参数，选择输出的 XMI 类型，可选 `4`、`2026`、`open`，默认为 `4`。`4` 保持现有格式；`2026` 暂时与 `4` 相同。`open` 默认使用 `iscf=8`，仅允许 `iscf=7/8/9`，并在 `$ctrl` 中自动写入唯一的 `eigensolver=davidson`。已有透传的求解器设置会被替换。此模式的 `iscf` 设置也用于 BLW 初猜和 BOVB 两阶段计算，不再由流程强制改为 `5` 或 `2`。`xmitype` 本身是 autoVB 参数，不作为 XMVB 关键字写出。
+字符串参数，选择输出的 XMI 类型，可选 `4`、`2026`、`open`，默认为 `4`。`4` 保持现有格式；`2026` 将坐标作为 `&geo ... &end` 内嵌在 `$ctrl` 中，总电荷使用 `charge=`，并将 `int=libcint` 输出为 `int=exact`。显式指定的 `exact`、`lr` 或其他积分值照常保留；其他控制项及透传选项不筛除，不额外检查目标程序的支持范围。`open` 默认使用 `iscf=8`，仅允许 `iscf=7/8/9`，并在 `$ctrl` 中自动写入唯一的 `eigensolver=davidson`。已有透传的求解器设置会被替换。此模式的 `iscf` 设置也用于 BLW 初猜和 BOVB 两阶段计算，不再由流程强制改为 `5` 或 `2`。`xmitype` 本身是 autoVB 参数，不作为 XMVB 关键字写出。
 
 ```text
 autovb{xmitype=open}
